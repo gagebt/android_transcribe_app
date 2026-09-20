@@ -19,7 +19,7 @@ final class KeyboardReturnPolicy {
                                               String inserted) {
         if (commitThrew) return InsertionResult.POSSIBLY_SENT;
         if (!commitReturned) return InsertionResult.NOT_SENT;
-        if (before != null && after != null && !after.isExactCommitOf(before, inserted)) {
+        if (before != null && after != null && after.isKnownMismatchFrom(before, inserted)) {
             return InsertionResult.POSSIBLY_SENT;
         }
         return InsertionResult.ACCEPTED;
@@ -43,14 +43,33 @@ final class KeyboardReturnPolicy {
         }
 
         boolean isExactCommitOf(EditorSnapshot before, String inserted) {
-            int start = before.selectionStart - before.startOffset;
-            int end = before.selectionEnd - before.startOffset;
-            if (start < 0 || end < start || end > before.text.length()) return false;
+            if (!isComparableTo(before)) return false;
+            int start = Math.min(before.selectionStart, before.selectionEnd);
+            int end = Math.max(before.selectionStart, before.selectionEnd);
             String expected = before.text.substring(0, start) + inserted
                     + before.text.substring(end);
-            int cursor = before.selectionStart + inserted.length();
-            return startOffset == before.startOffset && expected.equals(text)
+            int cursor = start + inserted.length();
+            return expected.equals(text)
                     && selectionStart == cursor && selectionEnd == cursor;
+        }
+
+        boolean isKnownMismatchFrom(EditorSnapshot before, String inserted) {
+            return isComparableTo(before) && !isExactCommitOf(before, inserted);
+        }
+
+        boolean isComparableTo(EditorSnapshot before) {
+            return before != null && startOffset == before.startOffset
+                    && hasValidSelection() && before.hasValidSelection();
+        }
+
+        boolean hasValidSelection() {
+            int start = Math.min(selectionStart, selectionEnd);
+            int end = Math.max(selectionStart, selectionEnd);
+            return start >= 0 && end <= text.length();
+        }
+
+        int globalSelectionStart() {
+            return startOffset + selectionStart;
         }
     }
 }

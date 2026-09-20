@@ -529,7 +529,8 @@ public class RustInputMethodService extends InputMethodService {
                 && after != null
                 && new File(getFilesDir(), "select_transcription").exists()) {
             try {
-                int end = after.selectionStart;
+                if (!after.hasValidSelection()) return result;
+                int end = after.globalSelectionStart();
                 int start = end - committed.length();
                 if (start >= 0) {
                     ic.setSelection(start, end);

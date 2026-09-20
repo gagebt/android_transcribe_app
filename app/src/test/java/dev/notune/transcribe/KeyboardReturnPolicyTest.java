@@ -1,5 +1,6 @@
 package dev.notune.transcribe;
 
+import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
@@ -26,6 +27,7 @@ public class KeyboardReturnPolicyTest {
 
         assertTrue(committed.isExactCommitOf(before, "there "));
         assertFalse(rejected.isExactCommitOf(before, "there "));
+        assertTrue(rejected.isKnownMismatchFrom(before, "there "));
     }
 
     @Test public void transformedOrThrowingCommitNeverAutoReplaysOnRefocus() {
@@ -51,6 +53,40 @@ public class KeyboardReturnPolicyTest {
                         false, false, null, null, "text")));
         assertTrue(KeyboardReturnPolicy.classifyInsertion(
                 true, false, null, null, "text")
+                == KeyboardReturnPolicy.InsertionResult.ACCEPTED);
+    }
+
+    @Test public void nonzeroWindowUsesLocalSnapshotAndGlobalSelectionCoordinates() {
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot after =
+                new KeyboardReturnPolicy.EditorSnapshot("hello there ", 100, 12, 12);
+
+        assertTrue(after.isComparableTo(before));
+        assertTrue(after.isExactCommitOf(before, "there "));
+        assertEquals(112, after.globalSelectionStart());
+        assertEquals(106, after.globalSelectionStart() - "there ".length());
+    }
+
+    @Test public void reversedSelectionUsesItsLocalBounds() {
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 11, 6);
+        KeyboardReturnPolicy.EditorSnapshot after =
+                new KeyboardReturnPolicy.EditorSnapshot("hello there ", 100, 12, 12);
+
+        assertTrue(after.isExactCommitOf(before, "there "));
+    }
+
+    @Test public void shiftedWindowLeavesAcceptedCommitUnconfirmed() {
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot shifted =
+                new KeyboardReturnPolicy.EditorSnapshot("ello there ", 101, 11, 11);
+
+        assertFalse(shifted.isComparableTo(before));
+        assertFalse(shifted.isKnownMismatchFrom(before, "there "));
+        assertTrue(KeyboardReturnPolicy.classifyInsertion(
+                true, false, before, shifted, "there ")
                 == KeyboardReturnPolicy.InsertionResult.ACCEPTED);
     }
 }
