@@ -11,6 +11,7 @@ use crossbeam_channel::{Receiver, Sender};
 use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 
+use crate::audio::compact_for_inference;
 use crate::engine;
 use crate::streaming::{
     CutCause, Segmenter, SegmenterConfig, DEFAULT_SPLIT_SECONDS, MAX_SPLIT_SECONDS,
@@ -365,44 +366,53 @@ fn spawn_worker(
             if piece.cause == CutCause::Flush && piece.context.is_none() {
                 piece.context = previous.clone();
             }
-            let prepared_piece = piece.samples.clone();
-            let samples = match &piece.context {
-                Some(context) if piece.cause == CutCause::Flush => {
-                    let mut samples = context.samples.clone();
-                    samples.extend_from_slice(&prepared_piece);
-                    samples
-                }
-                _ => prepared_piece.clone(),
+            let prepared_piece = compact_for_inference(&piece.samples);
+            let transcription = if prepared_piece.is_empty() {
+                Ok(String::new())
+            } else {
+                let samples = match &piece.context {
+                    Some(context) if piece.cause == CutCause::Flush => {
+                        let mut samples = compact_for_inference(&context.samples);
+                        samples.extend_from_slice(&prepared_piece);
+                        samples
+                    }
+                    _ => prepared_piece.clone(),
+                };
+                engine::transcribe_shared(&eng, samples)
             };
-            match engine::transcribe_shared(&eng, samples) {
+            match transcription {
                 Ok(text) => {
                     if attempt.cancelled.load(Ordering::SeqCst) {
                         attempt.processing.store(false, Ordering::SeqCst);
                         return;
                     }
                     let candidate = text.trim().to_string();
-                    let delivered = match &piece.context {
-                        Some(context) if piece.cause == CutCause::Flush => {
-                            match suffix_after_prefix(&candidate, &context.text) {
-                                Some(suffix) => suffix,
-                                None => {
-                                    // The combined re-decode may phrase the
-                                    // already delivered context differently.
-                                    // The tail is disjoint owned audio, so run
-                                    // that alone and deliver only its words.
-                                    match engine::transcribe_shared(&eng, prepared_piece.clone()) {
-                                        Ok(tail) => owned_tail_text(&tail),
-                                        Err(e) => {
-                                            log::error!("final tail transcription failed: {}", e);
-                                            fail_piece(&attempt, piece, e);
-                                            blocked = true;
-                                            continue;
+                    let delivered = if prepared_piece.is_empty() {
+                        String::new()
+                    } else {
+                        match &piece.context {
+                            Some(context) if piece.cause == CutCause::Flush => {
+                                match suffix_after_prefix(&candidate, &context.text) {
+                                    Some(suffix) => suffix,
+                                    None => {
+                                        // The combined re-decode may phrase the
+                                        // already delivered context differently.
+                                        // The tail is disjoint owned audio, so run
+                                        // that alone and deliver only its words.
+                                        match engine::transcribe_shared(&eng, prepared_piece.clone()) {
+                                            Ok(tail) => owned_tail_text(&tail),
+                                            Err(e) => {
+                                                log::error!("final tail transcription failed: {}", e);
+                                                fail_piece(&attempt, piece, e);
+                                                blocked = true;
+                                                continue;
+                                            }
                                         }
                                     }
                                 }
                             }
+                            _ => candidate,
                         }
-                        _ => candidate,
                     };
                     match notify_piece(
                         &mut env,
