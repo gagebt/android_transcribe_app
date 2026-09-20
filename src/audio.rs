@@ -52,7 +52,12 @@ pub fn compact_for_inference(samples: &[f32]) -> Vec<f32> {
         .filter_map(|(frame, &level)| (level > quiet).then_some(frame))
         .collect();
     if active.is_empty() {
-        return Vec::new();
+        // A steady level is not proof of silence: the percentile can be speech.
+        return if levels.iter().all(|&level| level <= INFERENCE_SILENCE_FLOOR) {
+            Vec::new()
+        } else {
+            samples.to_vec()
+        };
     }
 
     let mut ranges = Vec::<(usize, usize)>::new();
@@ -127,6 +132,14 @@ mod tests {
 
         let compacted = compact_for_inference(&audio);
         assert!(compacted.windows(word.len()).any(|window| window == word));
+    }
+
+    #[test]
+    fn steady_nonquiet_audio_without_leading_silence_is_retained() {
+        for level in [0.1, 0.0008] {
+            let audio = word(0.28, level);
+            assert_eq!(compact_for_inference(&audio), audio);
+        }
     }
 
     #[test]
