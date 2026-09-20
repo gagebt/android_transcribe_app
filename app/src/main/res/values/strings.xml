@@ -26,6 +26,21 @@
     <string name="setting_auto_record">Auto-start recording</string>
     <string name="setting_auto_record_desc">Automatically begin recording when the keyboard opens</string>
 
+    <string name="setting_switch_back">Return to the previous keyboard</string>
+    <string name="setting_switch_back_desc">Switch back automatically when the dictation stops</string>
+    <string name="setting_insert_button">Show Insert button</string>
+    <string name="setting_insert_button_desc">Show an Insert action when saved dictation needs your attention</string>
+    <string name="setting_pause_sentence">How long a pause ends a sentence</string>
+    <string name="setting_pause_sentence_desc">Stop for less than this and your next words stay in the same sentence, so you can think in the middle of one. Stop for longer and the next words start a new sentence.</string>
+    <string name="setting_pause_sentence_value">How long a pause ends a sentence: %1$s s</string>
+    <string name="setting_pause_split">Pause before processing words</string>
+    <string name="setting_pause_split_desc">After this much silence, process the words so far while recording continues.</string>
+    <string name="setting_pause_split_value">Pause before processing words: %1$s s</string>
+    <string name="dictation_retry">Retry</string>
+    <string name="dictation_insert">Insert</string>
+    <string name="dictation_copy">Copy</string>
+    <string name="dictation_discard">Discard</string>
+
     <string name="setting_select_transcription">Select transcription</string>
     <string name="setting_select_transcription_desc">Highlight transcribed text so it can be deleted with a single backspace</string>
 
@@ -36,7 +51,8 @@
     <string name="setting_record_background_desc">Keep recording when the voice keyboard is hidden; the text is inserted when you return</string>
 
     <string name="setting_auto_stop">Auto-stop after silence</string>
-    <string name="setting_auto_stop_desc">End the voice input popup automatically ~2 seconds after you stop speaking</string>
+    <string name="setting_auto_stop_desc">End voice input after the selected amount of silence</string>
+    <string name="setting_auto_stop_value">Stop recording after silence: %1$s s</string>
 
     <string name="setting_subtitle_lines">Subtitle length</string>
     <string name="setting_subtitle_lines_desc">How many lines the live subtitles show; older text scrolls away</string>

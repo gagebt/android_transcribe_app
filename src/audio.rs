@@ -1,4 +1,5 @@
-//! Small audio helpers shared between the engine and the subtitle pipeline.
+//! Small audio helpers shared between the engine, the subtitle pipeline and
+//! the dictation segmenter.
 
 /// Centre of the quietest 100 ms window in `samples[from..to]`; used to pick a
 /// natural split point when audio must be cut mid-speech.

@@ -433,6 +433,142 @@
                             android:layout_height="wrap_content"/>
                     </LinearLayout>
 
+                    <!-- Return to the previous keyboard after dictation -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="16dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:layout_marginEnd="16dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_switch_back"
+                                android:textAppearance="?attr/textAppearanceBodyLarge"/>
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_switch_back_desc"
+                                android:textAppearance="?attr/textAppearanceBodySmall"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_switch_back"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <!-- Contextual Insert action for saved dictation -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="horizontal"
+                        android:gravity="center_vertical"
+                        android:layout_marginTop="16dp">
+
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical"
+                            android:layout_marginEnd="16dp">
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_insert_button"
+                                android:textAppearance="?attr/textAppearanceBodyLarge"/>
+
+                            <TextView
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="@string/setting_insert_button_desc"
+                                android:textAppearance="?attr/textAppearanceBodySmall"
+                                android:textColor="?attr/colorOnSurfaceVariant"
+                                android:layout_marginTop="2dp"/>
+                        </LinearLayout>
+
+                        <com.google.android.material.materialswitch.MaterialSwitch
+                            android:id="@+id/switch_insert_button"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <!-- How long a pause ends a sentence -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="16dp">
+
+                        <TextView
+                            android:id="@+id/text_pause_sentence_value"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_pause_sentence"
+                            android:textAppearance="?attr/textAppearanceBodyLarge"/>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_pause_sentence_desc"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginTop="2dp"/>
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/slider_pause_sentence"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:valueFrom="1.5"
+                            android:valueTo="8.0"
+                            android:stepSize="0.5"
+                            android:layout_marginTop="4dp"/>
+                    </LinearLayout>
+
+                    <!-- Silence before the current words are processed -->
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="16dp">
+
+                        <TextView
+                            android:id="@+id/text_pause_split_value"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_pause_split"
+                            android:textAppearance="?attr/textAppearanceBodyLarge"/>
+
+                        <TextView
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_pause_split_desc"
+                            android:textAppearance="?attr/textAppearanceBodySmall"
+                            android:textColor="?attr/colorOnSurfaceVariant"
+                            android:layout_marginTop="2dp"/>
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/slider_pause_split"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:valueFrom="1.5"
+                            android:valueTo="8.0"
+                            android:stepSize="0.5"
+                            android:layout_marginTop="4dp"/>
+                    </LinearLayout>
+
                     <!-- Pause audio -->
                     <LinearLayout
                         android:layout_width="match_parent"
@@ -575,6 +711,29 @@
                             android:id="@+id/switch_auto_stop"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"/>
+                    </LinearLayout>
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:orientation="vertical"
+                        android:layout_marginTop="4dp">
+
+                        <TextView
+                            android:id="@+id/text_auto_stop_value"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="@string/setting_auto_stop_value"
+                            android:textAppearance="?attr/textAppearanceBodyMedium"/>
+
+                        <com.google.android.material.slider.Slider
+                            android:id="@+id/slider_auto_stop"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:valueFrom="1.5"
+                            android:valueTo="8.0"
+                            android:stepSize="0.5"
+                            android:layout_marginTop="4dp"/>
                     </LinearLayout>
 
                     <!-- Subtitle line count -->

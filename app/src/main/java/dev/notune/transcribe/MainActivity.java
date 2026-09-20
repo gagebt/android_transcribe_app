@@ -90,12 +90,24 @@ public class MainActivity extends AppCompatActivity {
 
         // Settings stored as marker files in filesDir (readable from the :ime
         // process and native code without a content provider).
-        bindMarkerSwitch(R.id.switch_auto_record, "auto_record", false);
+        // Auto-start recording and the return to the previous keyboard are both
+        // default ON in this build, so their marker files are the opt-outs.
+        bindMarkerSwitch(R.id.switch_auto_record, "no_auto_record", true);
+        bindMarkerSwitch(R.id.switch_switch_back, "no_switch_back", true);
+        bindMarkerSwitch(R.id.switch_insert_button, "no_insert_button", true);
+        bindPauseSlider(R.id.slider_pause_sentence, R.id.text_pause_sentence_value,
+                R.string.setting_pause_sentence_value, "pause_sentence_seconds",
+                PieceJoiner.DEFAULT_SENTENCE_PAUSE_SECONDS);
+        bindPauseSlider(R.id.slider_pause_split, R.id.text_pause_split_value,
+                R.string.setting_pause_split_value, "pause_split_seconds", 3.0f);
+        View autoStopSlider = bindPauseSlider(
+                R.id.slider_auto_stop, R.id.text_auto_stop_value,
+                R.string.setting_auto_stop_value, "auto_stop_seconds", 3.0f);
         bindMarkerSwitch(R.id.switch_select_transcription, "select_transcription", false);
         bindMarkerSwitch(R.id.switch_pause_audio, "pause_audio", false);
         // Record-in-background defaults to ON; its marker file is the opt-out.
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);
-        bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false);
+        bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false, autoStopSlider);
 
         // Live subtitle line limit: 2 (default), 4, or 0 = unlimited.
         RadioGroup subsLinesGroup = findViewById(R.id.rg_subtitle_lines);
@@ -278,14 +290,68 @@ public class MainActivity extends AppCompatActivity {
         Snackbar.make(findViewById(android.R.id.content), message, Snackbar.LENGTH_LONG).show();
     }
 
+    /** Stores one decimal seconds setting where both the IME and native code can read it. */
+    private View bindPauseSlider(int sliderId, int labelId, int valueStringId,
+                                 String fileName, float defaultValue) {
+        com.google.android.material.slider.Slider slider =
+                findViewById(sliderId);
+        TextView label = findViewById(labelId);
+        File file = new File(getFilesDir(), fileName);
+
+        float current = defaultValue;
+        try {
+            if (file.exists()) {
+                java.io.BufferedReader r =
+                        new java.io.BufferedReader(new java.io.FileReader(file));
+                try {
+                    String line = r.readLine();
+                    if (line != null) {
+                        current = SentencePauseSetting.parse(line, defaultValue);
+                    }
+                } finally {
+                    r.close();
+                }
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "could not read " + fileName, t);
+        }
+
+        slider.setValue(current);
+        label.setText(getString(valueStringId,
+                String.format(java.util.Locale.US, "%.1f", current)));
+
+        slider.addOnChangeListener((s, value, fromUser) -> {
+            label.setText(getString(valueStringId,
+                    String.format(java.util.Locale.US, "%.1f", value)));
+            if (!fromUser) return;
+            try {
+                java.io.FileWriter w = new java.io.FileWriter(file);
+                try {
+                    w.write(String.format(java.util.Locale.US, "%.1f", value));
+                } finally {
+                    w.close();
+                }
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to write " + fileName, e);
+            }
+        });
+        return slider;
+    }
+
     /**
      * Binds a switch to a marker file in filesDir. With {@code inverted}, the
      * file's presence means the switch is OFF (used for default-on settings).
      */
     private void bindMarkerSwitch(int switchId, String fileName, boolean inverted) {
+        bindMarkerSwitch(switchId, fileName, inverted, null);
+    }
+
+    private void bindMarkerSwitch(int switchId, String fileName, boolean inverted,
+                                  View dependentControl) {
         CompoundButton sw = findViewById(switchId);
         File marker = new File(getFilesDir(), fileName);
         sw.setChecked(marker.exists() != inverted);
+        setControlEnabled(dependentControl, sw.isChecked());
         sw.setOnCheckedChangeListener((buttonView, isChecked) -> {
             boolean shouldExist = isChecked != inverted;
             if (shouldExist) {
@@ -297,7 +363,14 @@ public class MainActivity extends AppCompatActivity {
             } else {
                 marker.delete();
             }
+            setControlEnabled(dependentControl, isChecked);
         });
+    }
+
+    private void setControlEnabled(View control, boolean enabled) {
+        if (control == null) return;
+        control.setEnabled(enabled);
+        control.setAlpha(enabled ? 1.0f : 0.45f);
     }
 
     private void checkAndRequestPermissions() {

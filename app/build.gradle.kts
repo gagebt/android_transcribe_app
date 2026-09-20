@@ -80,6 +80,10 @@ if (!isBundle) {
 }
 
 dependencies {
+    // JVM unit tests for the pure text-placement rules: no device, no emulator,
+    // no speech model.
+    testImplementation("junit:junit:4.13.2")
+
     // Material Components (Material 3 / Material You). Pulls in AppCompat.
     implementation("com.google.android.material:material:1.12.0")
 

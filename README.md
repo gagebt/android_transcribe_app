@@ -168,3 +168,28 @@ The built-in Parakeet TDT GGUF model (~485 MB) is automatically downloaded from 
 ## License
 
 [MIT](LICENSE)
+
+
+### Streaming dictation
+
+Keyboard dictation transcribes completed speech pieces while recording continues.
+It cuts at pauses instead of a fixed recording length. Short final utterances are
+flushed when recording stops. Clear quiet is removed from inference input with
+one second of real recorded context around audible events; original audio and
+pause timing remain available for retry and sentence joining.
+
+Separate settings control the pause before processing a piece, the pause that
+starts a new sentence, and the silence before optional automatic stop. Each
+defaults to 3 seconds and can be adjusted from 1.5 to 8 seconds.
+Recording can start automatically when the voice keyboard opens and return to the
+previous keyboard after completion; both behaviors can be disabled.
+
+The keyboard sends new text even when an editor cannot provide readback. Known
+field or cursor changes stop automatic insertion. Saved text has Copy, Discard,
+and an optional Insert action; Insert explicitly places the draft at the current
+cursor. Failed inference retains audio for Retry. A successful write with no
+readback is not automatically repeated, because the editor may already contain it.
+
+Recognition still depends on the model and audio. Very short words can be
+ambiguous across languages. A final decode that disagrees with earlier text uses
+the separate final audio where possible and otherwise stays recoverable.
