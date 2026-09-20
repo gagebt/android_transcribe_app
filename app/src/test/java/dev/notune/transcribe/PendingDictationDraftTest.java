@@ -35,22 +35,22 @@ public class PendingDictationDraftTest {
     }
 
     @Test public void readableEditorMustShowTheExactCommittedText() {
-        RustInputMethodService.EditorSnapshot before =
-                new RustInputMethodService.EditorSnapshot("hello world", 0, 6, 11);
-        RustInputMethodService.EditorSnapshot committed =
-                new RustInputMethodService.EditorSnapshot("hello there ", 0, 12, 12);
-        RustInputMethodService.EditorSnapshot rejected =
-                new RustInputMethodService.EditorSnapshot("hello world", 0, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 0, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot committed =
+                new KeyboardReturnPolicy.EditorSnapshot("hello there ", 0, 12, 12);
+        KeyboardReturnPolicy.EditorSnapshot rejected =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 0, 6, 11);
         assertTrue(committed.isExactCommitOf(before, "there "));
         assertFalse(rejected.isExactCommitOf(before, "there "));
         assertTrue(rejected.isKnownMismatchFrom(before, "there "));
     }
 
     @Test public void nonzeroWindowUsesLocalSnapshotAndGlobalSelectionCoordinates() {
-        RustInputMethodService.EditorSnapshot before =
-                new RustInputMethodService.EditorSnapshot("hello world", 100, 6, 11);
-        RustInputMethodService.EditorSnapshot after =
-                new RustInputMethodService.EditorSnapshot("hello there ", 100, 12, 12);
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot after =
+                new KeyboardReturnPolicy.EditorSnapshot("hello there ", 100, 12, 12);
 
         assertTrue(after.isComparableTo(before));
         assertTrue(after.isExactCommitOf(before, "there "));
@@ -59,18 +59,18 @@ public class PendingDictationDraftTest {
     }
 
     @Test public void reversedSelectionUsesItsLocalBounds() {
-        RustInputMethodService.EditorSnapshot before =
-                new RustInputMethodService.EditorSnapshot("hello world", 100, 11, 6);
-        RustInputMethodService.EditorSnapshot after =
-                new RustInputMethodService.EditorSnapshot("hello there ", 100, 12, 12);
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 11, 6);
+        KeyboardReturnPolicy.EditorSnapshot after =
+                new KeyboardReturnPolicy.EditorSnapshot("hello there ", 100, 12, 12);
         assertTrue(after.isExactCommitOf(before, "there "));
     }
 
     @Test public void shiftedWindowIsNotComparable() {
-        RustInputMethodService.EditorSnapshot before =
-                new RustInputMethodService.EditorSnapshot("hello world", 100, 6, 11);
-        RustInputMethodService.EditorSnapshot shifted =
-                new RustInputMethodService.EditorSnapshot("ello there ", 101, 11, 11);
+        KeyboardReturnPolicy.EditorSnapshot before =
+                new KeyboardReturnPolicy.EditorSnapshot("hello world", 100, 6, 11);
+        KeyboardReturnPolicy.EditorSnapshot shifted =
+                new KeyboardReturnPolicy.EditorSnapshot("ello there ", 101, 11, 11);
         assertFalse(shifted.isComparableTo(before));
         assertFalse(shifted.isKnownMismatchFrom(before, "there "));
     }
