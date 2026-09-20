@@ -20,7 +20,10 @@ use crate::streaming::{
 
 const MIN_SPEECH_LEVEL: f32 = 0.12;
 const SPEECH_MARGIN: f32 = 0.08;
-const AUTO_STOP_SILENCE_MS: u64 = 2000;
+const AUTO_STOP_SECONDS_FILE: &str = "auto_stop_seconds";
+const MIN_AUTO_STOP_SECONDS: f32 = 1.5;
+const MAX_AUTO_STOP_SECONDS: f32 = 8.0;
+const DEFAULT_AUTO_STOP_SECONDS: f32 = 3.0;
 const AUTO_STOP_NO_SPEECH_MS: u64 = 8000;
 const SPLIT_SECONDS_FILE: &str = "pause_split_seconds";
 
@@ -513,12 +516,28 @@ fn finish_worker(env: &mut JNIEnv, state: &mut VoiceSessionState, attempt: &Arc<
     }
 }
 
+fn parse_auto_stop_seconds(value: &str) -> Option<f32> {
+    let seconds = value.trim().parse::<f32>().ok()?;
+    (seconds.is_finite() && (MIN_AUTO_STOP_SECONDS..=MAX_AUTO_STOP_SECONDS).contains(&seconds))
+        .then_some(seconds)
+}
+
+fn auto_stop_silence(files_dir: Option<&Path>) -> Duration {
+    let seconds = files_dir
+        .and_then(|dir| std::fs::read_to_string(dir.join(AUTO_STOP_SECONDS_FILE)).ok())
+        .as_deref()
+        .and_then(parse_auto_stop_seconds)
+        .unwrap_or(DEFAULT_AUTO_STOP_SECONDS);
+    Duration::from_secs_f32(seconds)
+}
+
 pub fn start_recording(
     mut env: JNIEnv,
     state: &mut VoiceSessionState,
     session_id: i64,
     auto_stop: bool,
 ) -> bool {
+    let auto_stop_silence = auto_stop_silence(state.files_dir.as_deref());
     if session_id <= 0 {
         return false;
     }
@@ -660,7 +679,7 @@ pub fn start_recording(
             }
             let speech = endpoint.speech_started.load(Ordering::SeqCst);
             let silence = endpoint.last_voice.lock().unwrap().elapsed();
-            let done = (speech && silence >= Duration::from_millis(AUTO_STOP_SILENCE_MS))
+            let done = (speech && silence >= auto_stop_silence)
                 || (!speech
                     && started_at.elapsed() >= Duration::from_millis(AUTO_STOP_NO_SPEECH_MS));
             if done && session_active.swap(false, Ordering::SeqCst) {
@@ -905,5 +924,30 @@ mod tests {
         assert_eq!(parse_pause_seconds("8.01"), None);
         assert_eq!(parse_pause_seconds("NaN"), None);
         assert_eq!(parse_pause_seconds("oops"), None);
+    }
+
+    #[test]
+    fn duration_reads_saved_value_and_defaults_invalid_input() {
+        let dir =
+            std::env::temp_dir().join(format!("notune-auto-stop-setting-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let setting = dir.join(AUTO_STOP_SECONDS_FILE);
+
+        std::fs::write(&setting, "4.5\n").unwrap();
+        assert_eq!(auto_stop_silence(Some(&dir)), Duration::from_millis(4500));
+
+        std::fs::write(&setting, "0.2").unwrap();
+        assert_eq!(auto_stop_silence(Some(&dir)), Duration::from_secs(3));
+
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn duration_accepts_only_the_published_range() {
+        assert_eq!(parse_auto_stop_seconds("1.5"), Some(1.5));
+        assert_eq!(parse_auto_stop_seconds("8"), Some(8.0));
+        assert_eq!(parse_auto_stop_seconds("1.49"), None);
+        assert_eq!(parse_auto_stop_seconds("8.01"), None);
+        assert_eq!(parse_auto_stop_seconds("NaN"), None);
     }
 }
