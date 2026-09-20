@@ -8,6 +8,35 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class DictationBufferTest {
+    @Test public void emptyFirstPieceAdvancesToLaterWords() {
+        DictationBuffer buffer = new DictationBuffer();
+        buffer.reset(7);
+
+        assertTrue(buffer.accept(7, 0, "", 0f, 3f));
+        assertTrue(buffer.accept(7, 1, "Hello.", 1f, 3f));
+        assertEquals("Hello.", buffer.finish(7));
+    }
+
+    @Test public void emptyMiddlePieceDoesNotDropOrDuplicateWords() {
+        DictationBuffer buffer = new DictationBuffer();
+        buffer.reset(7);
+
+        assertTrue(buffer.accept(7, 0, "First part.", 0f, 3f));
+        assertTrue(buffer.accept(7, 1, " ", 1f, 3f));
+        assertTrue(buffer.accept(7, 1, " ", 1f, 3f));
+        assertTrue(buffer.accept(7, 2, "Second part.", 1f, 3f));
+        assertEquals("First part second part.", buffer.finish(7));
+    }
+
+    @Test public void emptyFinalPieceCompletesPriorWords() {
+        DictationBuffer buffer = new DictationBuffer();
+        buffer.reset(7);
+
+        assertTrue(buffer.accept(7, 0, "Hello.", 0f, 3f));
+        assertTrue(buffer.accept(7, 1, "", 1f, 3f));
+        assertEquals("Hello.", buffer.finish(7));
+    }
+
     @Test public void sameSessionIsOrderedAndDuplicateDeliveryIsIdempotent() {
         DictationBuffer buffer = new DictationBuffer();
         buffer.reset(7);

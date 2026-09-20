@@ -287,9 +287,8 @@ fn suffix_after_prefix(candidate: &str, prior: &str) -> Option<String> {
     Some(suffix.to_string())
 }
 
-fn owned_tail_text(candidate: &str) -> Option<String> {
-    let candidate = candidate.trim();
-    (!candidate.is_empty()).then(|| candidate.to_string())
+fn owned_tail_text(candidate: &str) -> String {
+    candidate.trim().to_string()
 }
 
 fn settle_attempt(env: &mut JNIEnv, obj: &JObject, attempt: &Attempt) {
@@ -382,9 +381,6 @@ fn spawn_worker(
                         return;
                     }
                     let candidate = text.trim().to_string();
-                    if candidate.is_empty() && piece.context.is_none() {
-                        continue;
-                    }
                     let delivered = match &piece.context {
                         Some(context) if piece.cause == CutCause::Flush => {
                             match suffix_after_prefix(&candidate, &context.text) {
@@ -395,18 +391,7 @@ fn spawn_worker(
                                     // The tail is disjoint owned audio, so run
                                     // that alone and deliver only its words.
                                     match engine::transcribe_shared(&eng, prepared_piece.clone()) {
-                                        Ok(tail) if owned_tail_text(&tail).is_some() => {
-                                            owned_tail_text(&tail).unwrap()
-                                        }
-                                        Ok(_) => {
-                                            fail_piece(
-                                                &attempt,
-                                                piece,
-                                                "final words need recovery".to_string(),
-                                            );
-                                            blocked = true;
-                                            continue;
-                                        }
+                                        Ok(tail) => owned_tail_text(&tail),
                                         Err(e) => {
                                             log::error!("final tail transcription failed: {}", e);
                                             fail_piece(&attempt, piece, e);
@@ -419,9 +404,6 @@ fn spawn_worker(
                         }
                         _ => candidate,
                     };
-                    if delivered.is_empty() {
-                        continue;
-                    }
                     match notify_piece(
                         &mut env,
                         obj,
@@ -431,11 +413,13 @@ fn spawn_worker(
                         piece.pause_before,
                     ) {
                         Ok(true) => {
-                            attempt
-                                .delivered_texts
-                                .lock()
-                                .unwrap()
-                                .push(delivered.clone());
+                            if !delivered.is_empty() {
+                                attempt
+                                    .delivered_texts
+                                    .lock()
+                                    .unwrap()
+                                    .push(delivered.clone());
+                            }
                             if piece.cause != CutCause::Flush {
                                 previous = Some(ContextPiece {
                                     // Keep the original interval for retry.
@@ -894,11 +878,11 @@ mod tests {
     }
 
     #[test]
-    fn empty_owned_tail_requires_recovery() {
-        assert_eq!(owned_tail_text(" \n "), None);
+    fn empty_owned_tail_is_an_explicit_disposition() {
+        assert_eq!(owned_tail_text(" \n "), "");
         assert_eq!(
             owned_tail_text(" Around with voiceovers. "),
-            Some("Around with voiceovers.".to_string())
+            "Around with voiceovers."
         );
     }
 

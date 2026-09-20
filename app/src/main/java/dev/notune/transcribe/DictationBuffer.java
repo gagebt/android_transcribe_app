@@ -16,12 +16,14 @@ final class DictationBuffer {
 
     synchronized boolean accept(long callbackSessionId, long sequence, String piece,
                                 float pauseBeforeSeconds, float sentencePauseSeconds) {
-        if (callbackSessionId != sessionId || piece == null || piece.trim().isEmpty()) {
+        if (callbackSessionId != sessionId || piece == null) {
             return false;
         }
         if (sequence < nextSequence) return true;
         if (sequence != nextSequence) return false;
-        text.append(joiner.join(piece, pauseBeforeSeconds, sentencePauseSeconds));
+        if (!piece.trim().isEmpty()) {
+            text.append(joiner.join(piece, pauseBeforeSeconds, sentencePauseSeconds));
+        }
         nextSequence++;
         return true;
     }
