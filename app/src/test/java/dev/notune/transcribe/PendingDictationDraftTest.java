@@ -43,5 +43,35 @@ public class PendingDictationDraftTest {
                 new RustInputMethodService.EditorSnapshot("hello world", 0, 6, 11);
         assertTrue(committed.isExactCommitOf(before, "there "));
         assertFalse(rejected.isExactCommitOf(before, "there "));
+        assertTrue(rejected.isKnownMismatchFrom(before, "there "));
+    }
+
+    @Test public void nonzeroWindowUsesLocalSnapshotAndGlobalSelectionCoordinates() {
+        RustInputMethodService.EditorSnapshot before =
+                new RustInputMethodService.EditorSnapshot("hello world", 100, 6, 11);
+        RustInputMethodService.EditorSnapshot after =
+                new RustInputMethodService.EditorSnapshot("hello there ", 100, 12, 12);
+
+        assertTrue(after.isComparableTo(before));
+        assertTrue(after.isExactCommitOf(before, "there "));
+        assertEquals(112, after.globalSelectionStart());
+        assertEquals(106, after.globalSelectionStart() - "there ".length());
+    }
+
+    @Test public void reversedSelectionUsesItsLocalBounds() {
+        RustInputMethodService.EditorSnapshot before =
+                new RustInputMethodService.EditorSnapshot("hello world", 100, 11, 6);
+        RustInputMethodService.EditorSnapshot after =
+                new RustInputMethodService.EditorSnapshot("hello there ", 100, 12, 12);
+        assertTrue(after.isExactCommitOf(before, "there "));
+    }
+
+    @Test public void shiftedWindowIsNotComparable() {
+        RustInputMethodService.EditorSnapshot before =
+                new RustInputMethodService.EditorSnapshot("hello world", 100, 6, 11);
+        RustInputMethodService.EditorSnapshot shifted =
+                new RustInputMethodService.EditorSnapshot("ello there ", 101, 11, 11);
+        assertFalse(shifted.isComparableTo(before));
+        assertFalse(shifted.isKnownMismatchFrom(before, "there "));
     }
 }

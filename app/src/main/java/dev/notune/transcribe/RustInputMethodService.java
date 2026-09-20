@@ -564,7 +564,8 @@ public class RustInputMethodService extends InputMethodService {
         }
 
         EditorSnapshot after = readEditorSnapshot(ic);
-        if (before != null && after != null && !after.isExactCommitOf(before, attempted.text)) {
+        if (before != null && after != null
+                && after.isKnownMismatchFrom(before, attempted.text)) {
             recoveryMessage = "Editor did not confirm the write; text may already be inserted";
             renderRecovery();
             return;
@@ -577,8 +578,8 @@ public class RustInputMethodService extends InputMethodService {
     private void selectTranscriptionIfEnabled(
             InputConnection ic, String committed, EditorSnapshot snapshot) {
         if (pendingSwitchBack || !new File(getFilesDir(), "select_transcription").exists()) return;
-        if (snapshot == null) return;
-        int end = snapshot.selectionStart;
+        if (snapshot == null || !snapshot.hasValidSelection()) return;
+        int end = snapshot.globalSelectionStart();
         int start = end - committed.length();
         if (start >= 0) ic.setSelection(start, end);
     }
@@ -597,13 +598,32 @@ public class RustInputMethodService extends InputMethodService {
         }
 
         boolean isExactCommitOf(EditorSnapshot before, String inserted) {
-            int start = before.selectionStart - before.startOffset;
-            int end = before.selectionEnd - before.startOffset;
-            if (start < 0 || end < start || end > before.text.length()) return false;
+            if (!isComparableTo(before)) return false;
+            int start = Math.min(before.selectionStart, before.selectionEnd);
+            int end = Math.max(before.selectionStart, before.selectionEnd);
             String expected = before.text.substring(0, start) + inserted + before.text.substring(end);
-            int cursor = before.selectionStart + inserted.length();
-            return startOffset == before.startOffset && expected.equals(text)
+            int cursor = start + inserted.length();
+            return expected.equals(text)
                     && selectionStart == cursor && selectionEnd == cursor;
+        }
+
+        boolean isKnownMismatchFrom(EditorSnapshot before, String inserted) {
+            return isComparableTo(before) && !isExactCommitOf(before, inserted);
+        }
+
+        boolean isComparableTo(EditorSnapshot before) {
+            return before != null && startOffset == before.startOffset
+                    && hasValidSelection() && before.hasValidSelection();
+        }
+
+        boolean hasValidSelection() {
+            int start = Math.min(selectionStart, selectionEnd);
+            int end = Math.max(selectionStart, selectionEnd);
+            return start >= 0 && end <= text.length();
+        }
+
+        int globalSelectionStart() {
+            return startOffset + selectionStart;
         }
     }
 
