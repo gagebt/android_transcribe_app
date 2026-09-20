@@ -353,6 +353,8 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void startDictation() {
+        // Keep the current result and retry identity until processing finishes.
+        if (!sessionTerminal) return;
         activeSessionId = Math.max(activeSessionId + 1,
                 Math.max(1, android.os.SystemClock.elapsedRealtimeNanos()));
         sessionTerminal = false;
@@ -468,8 +470,7 @@ public class RustInputMethodService extends InputMethodService {
             return;
         }
         String completed = dictationBuffer.finish(sessionId);
-        if (!completed.isEmpty()) onTextTranscribed(completed);
-        else updateRecordButtonUI(false);
+        onTextTranscribed(completed);
     }
 
     public void onDictationLevel(long sessionId, float level) {
