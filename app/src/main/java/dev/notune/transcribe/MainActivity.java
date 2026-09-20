@@ -97,6 +97,7 @@ public class MainActivity extends AppCompatActivity {
         bindPauseSlider(R.id.slider_pause_split, R.id.text_pause_split_value,
                 R.string.setting_pause_split_value, "pause_split_seconds", 3.0f);
         bindMarkerSwitch(R.id.switch_switch_back, "no_switch_back", true);
+        bindMarkerSwitch(R.id.switch_insert_button, "no_insert_button", true);
         bindMarkerSwitch(R.id.switch_select_transcription, "select_transcription", false);
         bindMarkerSwitch(R.id.switch_pause_audio, "pause_audio", false);
         // Record-in-background defaults to ON; its marker file is the opt-out.

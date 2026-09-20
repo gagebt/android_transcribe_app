@@ -34,6 +34,11 @@
     <string name="setting_pause_split_value">Pause before processing words: %1$s s</string>
     <string name="setting_switch_back">Return to the previous keyboard</string>
     <string name="setting_switch_back_desc">Switch back automatically after text is inserted</string>
+    <string name="setting_insert_button">Show Insert recovery action</string>
+    <string name="setting_insert_button_desc">Allow saved dictation to be inserted at the current cursor</string>
+    <string name="dictation_insert">Insert</string>
+    <string name="dictation_copy">Copy</string>
+    <string name="dictation_discard">Discard</string>
 
     <string name="setting_select_transcription">Select transcription</string>
     <string name="setting_select_transcription_desc">Highlight transcribed text so it can be deleted with a single backspace</string>
