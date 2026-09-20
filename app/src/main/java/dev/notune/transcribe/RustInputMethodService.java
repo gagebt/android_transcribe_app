@@ -12,6 +12,7 @@ import android.widget.ProgressBar;
 import android.os.Handler;
 import android.os.Looper;
 import android.util.Log;
+import android.util.AtomicFile;
 import android.content.Context;
 import android.content.pm.PackageManager;
 import android.view.MotionEvent;
@@ -19,6 +20,8 @@ import android.view.inputmethod.EditorInfo;
 import android.content.res.ColorStateList;
 import android.view.ContextThemeWrapper;
 import java.io.File;
+import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 
 import com.google.android.material.color.DynamicColors;
 import com.google.android.material.color.MaterialColors;
@@ -74,17 +77,22 @@ public class RustInputMethodService extends InputMethodService {
     // a genuine hidden -> shown transition, or a cursor tap starts a
     // recording the user never asked for.
     private boolean windowVisible = false;
-    // Transcribed text waiting to be committed because no editor was focused
-    // when transcription finished. This happens on long transcribes where the
-    // target field (e.g. a web field in Firefox/Gemini) drops focus while we
-    // process audio. Flushed from onStartInputView once a field is focused
-    // again so the text is never lost.
-    private String pendingCommitText = null;
+    private PendingDictationDraft pendingDraft;
+    private AtomicFile pendingDraftFile;
+    private String recoveryReadError;
+    private String recoveryMessage;
+    private View recoveryPanel;
+    private TextView recoveryText;
+    private Button insertButton;
+    private Button copyButton;
+    private Button discardButton;
 
     @Override
     public void onCreate() {
         super.onCreate();
         mainHandler = new Handler(Looper.getMainLooper());
+        pendingDraftFile = new AtomicFile(new File(getNoBackupFilesDir(), "pending-dictation"));
+        pendingDraft = readPendingDraft();
         Log.d(TAG, "Service onCreate");
         try {
             initNative(this);
@@ -128,6 +136,15 @@ public class RustInputMethodService extends InputMethodService {
             spaceButton = view.findViewById(R.id.ime_space);
             enterButton = view.findViewById(R.id.ime_enter);
             switchKeyboardButton = view.findViewById(R.id.ime_switch_keyboard);
+            recoveryPanel = view.findViewById(R.id.ime_recovery_panel);
+            recoveryText = view.findViewById(R.id.ime_recovery_text);
+            insertButton = view.findViewById(R.id.ime_recovery_insert);
+            copyButton = view.findViewById(R.id.ime_recovery_copy);
+            discardButton = view.findViewById(R.id.ime_recovery_discard);
+
+            insertButton.setOnClickListener(v -> insertPendingDraft());
+            copyButton.setOnClickListener(v -> copyPendingDraft());
+            discardButton.setOnClickListener(v -> discardPendingDraft());
 
             switchKeyboardButton.setOnClickListener(v -> {
                 if (isRecording) {
@@ -230,6 +247,7 @@ public class RustInputMethodService extends InputMethodService {
 
             recordContainer.setOnClickListener(v -> {
                 if (!recordContainer.isEnabled()) return;
+                if (hasUnresolvedDraft()) return;
 
                 // Check microphone permission
                 if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
@@ -283,6 +301,10 @@ public class RustInputMethodService extends InputMethodService {
             // text area); never auto-start a recording from here.
             return;
         }
+        if (hasUnresolvedDraft()) {
+            updateUiState();
+            return;
+        }
         if (new File(getFilesDir(), "auto_record").exists()) {
             if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
                     == PackageManager.PERMISSION_GRANTED) {
@@ -311,8 +333,8 @@ public class RustInputMethodService extends InputMethodService {
                 }
                 updateRecordButtonUI(false);
             } else {
-                // Default: keep recording in the background. The transcription
-                // is committed on return (or held in pendingCommitText).
+                // Default: keep recording in the background. If the target is
+                // unavailable at completion, the result becomes a saved draft.
                 return;
             }
         }
@@ -338,9 +360,7 @@ public class RustInputMethodService extends InputMethodService {
                 && ThemePrefs.isNight(ThemePrefs.wrapForNight(this, ThemePrefs.getMode(this))) != viewIsNight) {
             setInputView(onCreateInputView());
         }
-        // A field is focused and the input connection is live again — commit any
-        // text that finished transcribing while nothing was focused.
-        flushPendingText();
+        renderRecovery();
     }
 
     @Override
@@ -443,7 +463,7 @@ public class RustInputMethodService extends InputMethodService {
 
         // Disable button only during transcription/processing/waiting or fatal errors
         if (recordContainer != null) {
-            boolean disable = isTranscribing || isWaiting || isError;
+            boolean disable = isTranscribing || isWaiting || isError || hasUnresolvedDraft();
             recordContainer.setEnabled(!disable);
             recordContainer.setAlpha(disable ? 0.5f : 1.0f);
         }
@@ -451,6 +471,7 @@ public class RustInputMethodService extends InputMethodService {
         if (hintView != null && !isRecording) {
             hintView.setText("Tap to Record");
         }
+        renderRecovery();
     }
 
     // Called from Rust
@@ -471,15 +492,23 @@ public class RustInputMethodService extends InputMethodService {
                 return;
             }
             String committed = text + " ";
-            InputConnection ic = getCurrentInputConnection();
-            if (inputActive && ic != null) {
-                commitTranscribedText(ic, committed);
+            boolean staged;
+            if (pendingDraft == null) {
+                pendingDraft = new PendingDictationDraft(PendingDictationDraft.PENDING, committed);
+                staged = writePendingDraft(pendingDraft);
             } else {
-                // No editor is focused right now (common on long transcribes where
-                // a web field in Firefox/Gemini dropped focus while we processed
-                // audio). Committing now would be silently dropped, so defer the
-                // text until a field is focused again instead of losing it.
-                pendingCommitText = committed;
+                String combined = pendingDraft.text + "\n" + committed;
+                String state = pendingDraft.mayAlreadyBeDelivered()
+                        ? PendingDictationDraft.ATTEMPTED : PendingDictationDraft.PENDING;
+                pendingDraft = new PendingDictationDraft(state, combined);
+                staged = writePendingDraft(pendingDraft);
+                recoveryMessage = "Another result was added to saved dictation";
+            }
+            if (!staged) {
+                recoveryMessage = "Could not save dictation. Copy or insert it before leaving.";
+            } else if (inputActive && getCurrentInputConnection() != null
+                    && !pendingDraft.mayAlreadyBeDelivered()) {
+                commitPendingDraft();
             }
             if (pauseAudioActive) {
                 audioPauser.abandon(this);
@@ -487,41 +516,225 @@ public class RustInputMethodService extends InputMethodService {
             }
             updateRecordButtonUI(false);
             if (statusView != null) statusView.setText("Tap to Record");
-            if (pendingSwitchBack) {
+            updateUiState();
+            if (pendingSwitchBack && !hasUnresolvedDraft()) {
                 pendingSwitchBack = false;
                 switchToPreviousInputMethod();
+            } else if (hasUnresolvedDraft()) {
+                pendingSwitchBack = false;
             }
         });
     }
 
-    // Commits transcribed text into the active input connection, optionally
-    // selecting it afterwards (select_transcription setting).
-    private void commitTranscribedText(InputConnection ic, String committed) {
-        ic.commitText(committed, 1);
+    private void commitPendingDraft() {
+        if (pendingDraft == null || pendingDraft.text.isEmpty()) return;
+        InputConnection ic = getCurrentInputConnection();
+        if (!inputActive || ic == null) {
+            recoveryMessage = "No text field is available";
+            renderRecovery();
+            return;
+        }
 
-        if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
-            android.view.inputmethod.ExtractedText et = ic.getExtractedText(
-                new android.view.inputmethod.ExtractedTextRequest(), 0);
-            if (et != null) {
-                int end = et.selectionStart;
-                int start = end - committed.length();
-                if (start >= 0) {
-                    ic.setSelection(start, end);
-                }
-            }
+        PendingDictationDraft original = pendingDraft;
+        PendingDictationDraft attempted = original.withState(PendingDictationDraft.ATTEMPTED);
+        pendingDraft = attempted;
+        if (!writePendingDraft(attempted)) {
+            pendingDraft = original;
+            recoveryMessage = "Could not save the insertion attempt. Text was not sent.";
+            renderRecovery();
+            return;
+        }
+
+        EditorSnapshot before = readEditorSnapshot(ic);
+        boolean accepted;
+        try {
+            accepted = ic.commitText(attempted.text, 1);
+        } catch (Throwable t) {
+            Log.w(TAG, "editor commit failed", t);
+            recoveryMessage = "Editor write failed; text may already be inserted";
+            renderRecovery();
+            return;
+        }
+        if (!accepted) {
+            pendingDraft = original;
+            writePendingDraft(original);
+            recoveryMessage = "Editor rejected dictated text";
+            renderRecovery();
+            return;
+        }
+
+        EditorSnapshot after = readEditorSnapshot(ic);
+        if (before != null && after != null && !after.isExactCommitOf(before, attempted.text)) {
+            recoveryMessage = "Editor did not confirm the write; text may already be inserted";
+            renderRecovery();
+            return;
+        }
+
+        selectTranscriptionIfEnabled(ic, attempted.text, after);
+        if (clearPendingDraft()) recoveryMessage = null;
+    }
+
+    private void selectTranscriptionIfEnabled(
+            InputConnection ic, String committed, EditorSnapshot snapshot) {
+        if (pendingSwitchBack || !new File(getFilesDir(), "select_transcription").exists()) return;
+        if (snapshot == null) return;
+        int end = snapshot.selectionStart;
+        int start = end - committed.length();
+        if (start >= 0) ic.setSelection(start, end);
+    }
+
+    static final class EditorSnapshot {
+        final String text;
+        final int startOffset;
+        final int selectionStart;
+        final int selectionEnd;
+
+        EditorSnapshot(String text, int startOffset, int selectionStart, int selectionEnd) {
+            this.text = text;
+            this.startOffset = startOffset;
+            this.selectionStart = selectionStart;
+            this.selectionEnd = selectionEnd;
+        }
+
+        boolean isExactCommitOf(EditorSnapshot before, String inserted) {
+            int start = before.selectionStart - before.startOffset;
+            int end = before.selectionEnd - before.startOffset;
+            if (start < 0 || end < start || end > before.text.length()) return false;
+            String expected = before.text.substring(0, start) + inserted + before.text.substring(end);
+            int cursor = before.selectionStart + inserted.length();
+            return startOffset == before.startOffset && expected.equals(text)
+                    && selectionStart == cursor && selectionEnd == cursor;
         }
     }
 
-    // Commits text that finished transcribing while no field was focused. Called
-    // from onStartInputView when an editor (and a live input connection) is
-    // available again.
-    private void flushPendingText() {
-        if (pendingCommitText == null) return;
-        InputConnection ic = getCurrentInputConnection();
-        if (ic != null) {
-            commitTranscribedText(ic, pendingCommitText);
-            pendingCommitText = null;
+    private EditorSnapshot readEditorSnapshot(InputConnection ic) {
+        try {
+            android.view.inputmethod.ExtractedTextRequest request =
+                    new android.view.inputmethod.ExtractedTextRequest();
+            request.hintMaxChars = 1024 * 1024;
+            android.view.inputmethod.ExtractedText extracted = ic.getExtractedText(request, 0);
+            if (extracted == null || extracted.text == null) return null;
+            return new EditorSnapshot(extracted.text.toString(), extracted.startOffset,
+                    extracted.selectionStart, extracted.selectionEnd);
+        } catch (Throwable t) {
+            return null;
         }
+    }
+
+    private PendingDictationDraft readPendingDraft() {
+        try {
+            PendingDictationDraft restored = PendingDictationDraft.decode(pendingDraftFile.readFully());
+            if (restored == null) {
+                recoveryReadError = "Saved dictation is damaged. Discard it to continue.";
+                Log.e(TAG, "pending dictation record is malformed");
+            }
+            return restored;
+        } catch (FileNotFoundException e) {
+            if (!pendingDraftArtifactsExist()) return null;
+            recoveryReadError = "Saved dictation could not be read. Discard it to continue.";
+            Log.e(TAG, "pending dictation artifacts cannot be opened", e);
+            return null;
+        } catch (Throwable t) {
+            recoveryReadError = "Saved dictation could not be read. Discard it to continue.";
+            Log.e(TAG, "could not read pending dictation", t);
+            return null;
+        }
+    }
+
+    private boolean writePendingDraft(PendingDictationDraft draft) {
+        FileOutputStream output = null;
+        try {
+            output = pendingDraftFile.startWrite();
+            output.write(draft.encode());
+            pendingDraftFile.finishWrite(output);
+            output = null;
+            PendingDictationDraft check = PendingDictationDraft.decode(pendingDraftFile.readFully());
+            boolean matches = check != null && check.state.equals(draft.state)
+                    && check.text.equals(draft.text);
+            if (matches) recoveryReadError = null;
+            return matches;
+        } catch (Throwable t) {
+            if (output != null) pendingDraftFile.failWrite(output);
+            Log.e(TAG, "could not persist pending dictation", t);
+            return false;
+        }
+    }
+
+    private boolean clearPendingDraft() {
+        try {
+            pendingDraftFile.delete();
+        } catch (Throwable t) {
+            Log.e(TAG, "could not delete pending dictation", t);
+        }
+        if (pendingDraftArtifactsExist()) {
+            recoveryMessage = "Could not clear saved dictation. It may already be inserted.";
+            renderRecovery();
+            return false;
+        }
+        pendingDraft = null;
+        recoveryReadError = null;
+        renderRecovery();
+        return true;
+    }
+
+    private boolean pendingDraftArtifactsExist() {
+        File base = pendingDraftFile.getBaseFile();
+        return base.exists() || new File(base.getPath() + ".bak").exists()
+                || new File(base.getPath() + ".new").exists();
+    }
+
+    private boolean hasUnresolvedDraft() {
+        return pendingDraft != null || recoveryReadError != null;
+    }
+
+    private void renderRecovery() {
+        if (recoveryPanel == null) return;
+        if (!hasUnresolvedDraft()) {
+            recoveryPanel.setVisibility(View.GONE);
+            return;
+        }
+        recoveryPanel.setVisibility(View.VISIBLE);
+        if (pendingDraft == null) {
+            recoveryText.setText(recoveryReadError);
+            insertButton.setVisibility(View.GONE);
+            copyButton.setVisibility(View.GONE);
+            discardButton.setVisibility(View.VISIBLE);
+            return;
+        }
+        String label = recoveryMessage != null ? recoveryMessage
+                : pendingDraft.mayAlreadyBeDelivered()
+                ? "Delivery is uncertain; this text may already be in the field"
+                : "Saved dictation";
+        recoveryText.setText(label + "\n" + pendingDraft.text);
+        insertButton.setVisibility(isInsertButtonEnabled() ? View.VISIBLE : View.GONE);
+        copyButton.setVisibility(View.VISIBLE);
+        discardButton.setVisibility(View.VISIBLE);
+    }
+
+    private void insertPendingDraft() {
+        commitPendingDraft();
+        updateUiState();
+    }
+
+    private void copyPendingDraft() {
+        if (pendingDraft == null) return;
+        try {
+            android.content.ClipboardManager clipboard =
+                    (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
+            clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
+                    "dictation", pendingDraft.text));
+            recoveryMessage = "Dictation copied. Discard it when safe.";
+        } catch (Throwable t) {
+            recoveryMessage = "Could not copy dictation";
+            Log.w(TAG, "clipboard write failed", t);
+        }
+        renderRecovery();
+    }
+
+    private void discardPendingDraft() {
+        if (clearPendingDraft()) recoveryMessage = null;
+        updateUiState();
     }
     public void onAudioLevel(float level) {
         if (micLevelView != null) {
@@ -536,5 +749,10 @@ public class RustInputMethodService extends InputMethodService {
     /** "Record in background" is default ON; the marker file is the opt-out. */
     private boolean isStopOnHideEnabled() {
         return new File(getFilesDir(), "stop_on_hide").exists();
+    }
+
+    /** The recovery panel remains useful with Insert hidden: Copy and Discard stay available. */
+    private boolean isInsertButtonEnabled() {
+        return !new File(getFilesDir(), "no_insert_button").exists();
     }
 }
