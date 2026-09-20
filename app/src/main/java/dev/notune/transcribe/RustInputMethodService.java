@@ -54,6 +54,7 @@ public class RustInputMethodService extends InputMethodService {
     private Handler mainHandler;
     private boolean isRecording = false;
     private boolean pendingSwitchBack = false;
+    private boolean pendingAutomaticSwitchBack = false;
     private String lastStatus = "Initializing...";
     // Key repeat settings
     private static final long REPEAT_INITIAL_DELAY = 400; // ms before repeat starts
@@ -85,6 +86,9 @@ public class RustInputMethodService extends InputMethodService {
     private boolean retryAttempted = false;
     private final DictationBuffer dictationBuffer = new DictationBuffer();
     private volatile float sentencePauseSeconds = PieceJoiner.DEFAULT_SENTENCE_PAUSE_SECONDS;
+    // A commit that threw or changed readable text unexpectedly may already
+    // have reached the editor. Keep it for recovery, but never replay it.
+    private boolean pendingCommitMayBeSent = false;
 
     @Override
     public void onCreate() {
@@ -140,7 +144,7 @@ public class RustInputMethodService extends InputMethodService {
                     stopDictation();
                     updateRecordButtonUI(false);
                 } else {
-                    switchToPreviousInputMethod();
+                    switchBackToPreviousKeyboard();
                 }
             });
 
@@ -483,8 +487,7 @@ public class RustInputMethodService extends InputMethodService {
             lastStatus = status;
             updateUiState();
             if (pendingSwitchBack && status.startsWith("Error")) {
-                pendingSwitchBack = false;
-                switchToPreviousInputMethod();
+                finishSwitchBack(false);
             }
             if (pauseAudioActive && status != null && status.startsWith("Error")) {
                 audioPauser.abandon(this);
@@ -540,22 +543,25 @@ public class RustInputMethodService extends InputMethodService {
                     pauseAudioActive = false;
                 }
                 if (pendingSwitchBack) {
-                    pendingSwitchBack = false;
-                    switchToPreviousInputMethod();
+                    finishSwitchBack(false);
                 }
                 return;
             }
             String committed = text + " ";
+            pendingAutomaticSwitchBack = isSwitchBackEnabled();
             InputConnection ic = getCurrentInputConnection();
+            KeyboardReturnPolicy.InsertionResult insertion =
+                    KeyboardReturnPolicy.InsertionResult.NOT_SENT;
             if (inputActive && ic != null) {
-                commitTranscribedText(ic, committed);
-            } else {
-                // No editor is focused right now (common on long transcribes where
-                // a web field in Firefox/Gemini dropped focus while we processed
-                // audio). Committing now would be silently dropped, so defer the
-                // text until a field is focused again instead of losing it.
-                pendingCommitText = pendingCommitText == null
-                        ? committed : pendingCommitText + committed;
+                insertion = commitTranscribedText(ic, committed);
+            }
+            if (insertion != KeyboardReturnPolicy.InsertionResult.ACCEPTED) {
+                // Preserve unconfirmed text. Only a commit known not to have been
+                // sent may be replayed when an editor gains focus again.
+                pendingCommitText = committed;
+                pendingCommitMayBeSent =
+                        insertion == KeyboardReturnPolicy.InsertionResult.POSSIBLY_SENT;
+                if (pendingCommitMayBeSent) pendingAutomaticSwitchBack = false;
             }
             if (pauseAudioActive) {
                 audioPauser.abandon(this);
@@ -563,25 +569,25 @@ public class RustInputMethodService extends InputMethodService {
             }
             updateRecordButtonUI(false);
             if (statusView != null) statusView.setText("Tap to Record");
-            if (pendingSwitchBack) {
-                pendingSwitchBack = false;
-                switchToPreviousInputMethod();
-            }
+            finishSwitchBack(insertion == KeyboardReturnPolicy.InsertionResult.ACCEPTED);
         });
     }
 
     // Commits transcribed text into the active input connection, optionally
     // selecting it afterwards (select_transcription setting).
-    private void commitTranscribedText(InputConnection ic, String committed) {
+    private KeyboardReturnPolicy.InsertionResult commitTranscribedText(
+            InputConnection ic, String committed) {
         EditorInfo editor = getCurrentInputEditorInfo();
         TextFitter.FieldKind kind = FieldKinds.of(editor);
-        CharSequence before = null;
-        CharSequence after = null;
+        CharSequence beforeCursor = null;
+        CharSequence afterCursor = null;
         int caps = 0;
         if (kind == TextFitter.FieldKind.PROSE || kind == TextFitter.FieldKind.SEARCH) {
             // Editor context is optional. Unreadable context must not block insertion.
-            try { before = ic.getTextBeforeCursor(64, 0); } catch (RuntimeException ignored) { }
-            try { after = ic.getTextAfterCursor(16, 0); } catch (RuntimeException ignored) { }
+            try { beforeCursor = ic.getTextBeforeCursor(64, 0); }
+            catch (RuntimeException ignored) { }
+            try { afterCursor = ic.getTextAfterCursor(16, 0); }
+            catch (RuntimeException ignored) { }
             // Request only the field's modes. Requesting CHARACTERS unconditionally
             // makes Android report capitals even in the middle of ordinary prose.
             int requestedCaps = editor == null ? 0 : editor.inputType
@@ -590,19 +596,60 @@ public class RustInputMethodService extends InputMethodService {
             try { caps = ic.getCursorCapsMode(requestedCaps); }
             catch (RuntimeException ignored) { }
         }
-        committed = TextFitter.fit(committed, before, after, kind, caps).inserted();
-        ic.commitText(committed, 1);
+        committed = TextFitter.fit(
+                committed, beforeCursor, afterCursor, kind, caps).inserted();
+        KeyboardReturnPolicy.EditorSnapshot before = readEditorSnapshot(ic);
+        boolean commitReturned;
+        try {
+            commitReturned = ic.commitText(committed, 1);
+        } catch (Throwable t) {
+            Log.w(TAG, "Text insertion may have reached the editor", t);
+            return KeyboardReturnPolicy.classifyInsertion(
+                    false, true, before, null, committed);
+        }
 
-        if (!pendingSwitchBack && new File(getFilesDir(), "select_transcription").exists()) {
-            android.view.inputmethod.ExtractedText et = ic.getExtractedText(
-                new android.view.inputmethod.ExtractedTextRequest(), 0);
-            if (et != null) {
-                int end = et.selectionStart;
+        if (!commitReturned) Log.w(TAG, "Editor rejected transcribed text");
+        KeyboardReturnPolicy.EditorSnapshot after = readEditorSnapshot(ic);
+        KeyboardReturnPolicy.InsertionResult result =
+                KeyboardReturnPolicy.classifyInsertion(
+                        commitReturned, false, before, after, committed);
+        if (result == KeyboardReturnPolicy.InsertionResult.POSSIBLY_SENT) {
+            Log.w(TAG, "Editor did not confirm transcribed text");
+            return result;
+        }
+        if (result == KeyboardReturnPolicy.InsertionResult.NOT_SENT) {
+            return result;
+        }
+
+        if (!pendingSwitchBack && !pendingAutomaticSwitchBack
+                && after != null
+                && new File(getFilesDir(), "select_transcription").exists()) {
+            try {
+                if (!after.hasValidSelection()) return result;
+                int end = after.globalSelectionStart();
                 int start = end - committed.length();
                 if (start >= 0) {
                     ic.setSelection(start, end);
                 }
+            } catch (Throwable t) {
+                Log.w(TAG, "Could not select transcribed text", t);
             }
+        }
+        return result;
+    }
+
+    private KeyboardReturnPolicy.EditorSnapshot readEditorSnapshot(InputConnection ic) {
+        try {
+            android.view.inputmethod.ExtractedTextRequest request =
+                    new android.view.inputmethod.ExtractedTextRequest();
+            request.hintMaxChars = 1024 * 1024;
+            android.view.inputmethod.ExtractedText extracted = ic.getExtractedText(request, 0);
+            if (extracted == null || extracted.text == null) return null;
+            return new KeyboardReturnPolicy.EditorSnapshot(
+                    extracted.text.toString(), extracted.startOffset,
+                    extracted.selectionStart, extracted.selectionEnd);
+        } catch (Throwable t) {
+            return null;
         }
     }
 
@@ -610,12 +657,56 @@ public class RustInputMethodService extends InputMethodService {
     // from onStartInputView when an editor (and a live input connection) is
     // available again.
     private void flushPendingText() {
-        if (pendingCommitText == null) return;
+        if (pendingCommitText == null || pendingCommitMayBeSent) return;
         InputConnection ic = getCurrentInputConnection();
-        if (ic != null) {
-            commitTranscribedText(ic, pendingCommitText);
+        if (ic == null) return;
+        KeyboardReturnPolicy.InsertionResult insertion =
+                commitTranscribedText(ic, pendingCommitText);
+        if (insertion == KeyboardReturnPolicy.InsertionResult.ACCEPTED) {
             pendingCommitText = null;
+            pendingCommitMayBeSent = false;
+            finishSwitchBack(true);
+        } else if (!KeyboardReturnPolicy.shouldAutoReplay(insertion)) {
+            pendingCommitMayBeSent = true;
+            pendingAutomaticSwitchBack = false;
         }
+    }
+
+    private void finishSwitchBack(boolean insertionAccepted) {
+        if (!KeyboardReturnPolicy.shouldSwitch(
+                pendingSwitchBack, pendingAutomaticSwitchBack, insertionAccepted)) return;
+        pendingSwitchBack = false;
+        pendingAutomaticSwitchBack = false;
+        switchBackToPreviousKeyboard();
+    }
+
+    /**
+     * API 28 added InputMethodService.switchToPreviousInputMethod(). Android
+     * 8 and 8.1 use InputMethodManager.switchToLastInputMethod() instead.
+     */
+    private boolean switchBackToPreviousKeyboard() {
+        if (android.os.Build.VERSION.SDK_INT >= 28) {
+            try {
+                return switchToPreviousInputMethod();
+            } catch (Throwable t) {
+                Log.w(TAG, "switchToPreviousInputMethod failed", t);
+                return false;
+            }
+        }
+        try {
+            InputMethodManager imm =
+                    (InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            android.os.IBinder token = null;
+            if (getWindow() != null && getWindow().getWindow() != null) {
+                token = getWindow().getWindow().getAttributes().token;
+            }
+            if (imm != null && token != null) {
+                return imm.switchToLastInputMethod(token);
+            }
+        } catch (Throwable t) {
+            Log.w(TAG, "switchToLastInputMethod failed", t);
+        }
+        return false;
     }
     public void onAudioLevel(float level) {
         if (micLevelView != null) {
@@ -625,6 +716,11 @@ public class RustInputMethodService extends InputMethodService {
 
     private boolean isPauseAudioEnabled() {
         return new File(getFilesDir(), "pause_audio").exists();
+    }
+
+    /** Automatic return is default ON; the marker file is the opt-out. */
+    private boolean isSwitchBackEnabled() {
+        return !new File(getFilesDir(), "no_switch_back").exists();
     }
 
     /** "Record in background" is default ON; the marker file is the opt-out. */
