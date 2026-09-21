@@ -74,4 +74,5 @@ public class PendingDictationDraftTest {
         assertFalse(shifted.isComparableTo(before));
         assertFalse(shifted.isKnownMismatchFrom(before, "there "));
     }
+
 }

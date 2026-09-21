@@ -10,8 +10,8 @@ final class KeyboardReturnPolicy {
     }
 
     static boolean shouldSwitch(boolean manuallyRequested, boolean automaticEnabled,
-                                boolean insertionAccepted) {
-        return manuallyRequested || automaticEnabled && insertionAccepted;
+                                boolean insertionMayHaveBeenSent) {
+        return manuallyRequested || automaticEnabled && insertionMayHaveBeenSent;
     }
 
     static InsertionResult classifyInsertion(boolean commitReturned, boolean commitThrew,
@@ -19,10 +19,8 @@ final class KeyboardReturnPolicy {
                                               String inserted) {
         if (commitThrew) return InsertionResult.POSSIBLY_SENT;
         if (!commitReturned) return InsertionResult.NOT_SENT;
-        if (before != null && after != null && after.isKnownMismatchFrom(before, inserted)) {
-            return InsertionResult.POSSIBLY_SENT;
-        }
-        return InsertionResult.ACCEPTED;
+        return before != null && after != null && after.isExactCommitOf(before, inserted)
+                ? InsertionResult.ACCEPTED : InsertionResult.POSSIBLY_SENT;
     }
 
     static boolean shouldAutoReplay(InsertionResult result) {

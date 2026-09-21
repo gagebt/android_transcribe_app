@@ -7,7 +7,7 @@ import static org.junit.Assert.assertTrue;
 import org.junit.Test;
 
 public class KeyboardReturnPolicyTest {
-    @Test public void automaticReturnRequiresAcceptedInsertion() {
+    @Test public void automaticReturnRequiresAnAttemptThatMayHaveSentText() {
         assertTrue(KeyboardReturnPolicy.shouldSwitch(false, true, true));
         assertFalse(KeyboardReturnPolicy.shouldSwitch(false, false, true));
         assertFalse(KeyboardReturnPolicy.shouldSwitch(false, true, false));
@@ -47,13 +47,13 @@ public class KeyboardReturnPolicyTest {
         assertFalse(KeyboardReturnPolicy.shouldAutoReplay(threw));
     }
 
-    @Test public void definiteRejectionCanRetryButUnreadableAcceptanceSucceeds() {
+    @Test public void definiteRejectionCanRetryButUnreadableAcceptanceStaysUncertain() {
         assertTrue(KeyboardReturnPolicy.shouldAutoReplay(
                 KeyboardReturnPolicy.classifyInsertion(
                         false, false, null, null, "text")));
         assertTrue(KeyboardReturnPolicy.classifyInsertion(
                 true, false, null, null, "text")
-                == KeyboardReturnPolicy.InsertionResult.ACCEPTED);
+                == KeyboardReturnPolicy.InsertionResult.POSSIBLY_SENT);
     }
 
     @Test public void nonzeroWindowUsesLocalSnapshotAndGlobalSelectionCoordinates() {
@@ -87,6 +87,6 @@ public class KeyboardReturnPolicyTest {
         assertFalse(shifted.isKnownMismatchFrom(before, "there "));
         assertTrue(KeyboardReturnPolicy.classifyInsertion(
                 true, false, before, shifted, "there ")
-                == KeyboardReturnPolicy.InsertionResult.ACCEPTED);
+                == KeyboardReturnPolicy.InsertionResult.POSSIBLY_SENT);
     }
 }
