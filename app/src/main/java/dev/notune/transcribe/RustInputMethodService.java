@@ -563,15 +563,16 @@ public class RustInputMethodService extends InputMethodService {
             pendingAutomaticSwitchBack = isSwitchBackEnabled();
             KeyboardReturnPolicy.InsertionResult insertion =
                     KeyboardReturnPolicy.InsertionResult.NOT_SENT;
-            PendingDictationDraft previous = pendingDraft;
-            pendingDraft = new PendingDictationDraft(PendingDictationDraft.PENDING, committed);
+            pendingDraft = pendingDraft == null
+                    ? new PendingDictationDraft(PendingDictationDraft.PENDING, committed)
+                    : pendingDraft.stageCurrent(committed);
             boolean staged = writePendingDraft(pendingDraft);
             if (!staged) {
                 recoveryMessage = "Could not save the latest dictation";
             } else if (inputActive && getCurrentInputConnection() != null) {
-                recoveryMessage = previous == null
-                        ? null : "Latest dictation replaced the saved copy";
-                insertion = commitPendingDraft();
+                recoveryMessage = pendingDraft.savedText.isEmpty()
+                        ? null : "Older dictation stays saved";
+                insertion = commitPendingDraft(false);
             }
             if (insertion == KeyboardReturnPolicy.InsertionResult.NOT_SENT) {
                 pendingAutomaticSwitchBack = false;
@@ -611,8 +612,9 @@ public class RustInputMethodService extends InputMethodService {
                 committed, beforeCursor, afterCursor, kind, caps).inserted();
     }
 
-    private KeyboardReturnPolicy.InsertionResult commitPendingDraft() {
-        if (pendingDraft == null || pendingDraft.text.isEmpty()) {
+    private KeyboardReturnPolicy.InsertionResult commitPendingDraft(boolean includeSaved) {
+        if (pendingDraft == null
+                || (!includeSaved && (!pendingDraft.hasCurrent() || pendingDraft.text.isEmpty()))) {
             return KeyboardReturnPolicy.InsertionResult.NOT_SENT;
         }
         InputConnection ic = getCurrentInputConnection();
@@ -623,9 +625,12 @@ public class RustInputMethodService extends InputMethodService {
         }
 
         PendingDictationDraft original = pendingDraft;
-        String fitted = fitTranscribedText(ic, original.text);
-        PendingDictationDraft attempted =
-                new PendingDictationDraft(PendingDictationDraft.ATTEMPTED, fitted);
+        String source = includeSaved ? original.recoveryText() : original.text;
+        if (source.isEmpty()) return KeyboardReturnPolicy.InsertionResult.NOT_SENT;
+        String fitted = fitTranscribedText(ic, source);
+        PendingDictationDraft attempted = includeSaved
+                ? new PendingDictationDraft(PendingDictationDraft.ATTEMPTED, fitted)
+                : original.withCurrent(PendingDictationDraft.ATTEMPTED, fitted);
         pendingDraft = attempted;
         if (!writePendingDraft(attempted)) {
             pendingDraft = original;
@@ -636,9 +641,28 @@ public class RustInputMethodService extends InputMethodService {
 
         KeyboardReturnPolicy.InsertionResult result = commitTranscribedText(ic, fitted);
         if (result == KeyboardReturnPolicy.InsertionResult.ACCEPTED) {
-            if (clearPendingDraft()) {
+            if (includeSaved && clearPendingDraft()) {
                 recoveryMessage = null;
                 return result;
+            }
+            if (!includeSaved) {
+                PendingDictationDraft remaining = attempted.withoutCurrent();
+                if (remaining.isEmpty()) {
+                    if (clearPendingDraft()) {
+                        recoveryMessage = null;
+                        return result;
+                    }
+                } else {
+                    pendingDraft = remaining;
+                    if (writePendingDraft(remaining)) {
+                        recoveryMessage = "Older dictation stays saved";
+                        renderRecovery();
+                        return result;
+                    }
+                    pendingDraft = attempted;
+                    recoveryMessage = "Could not clear the delivered copy; it may be shown again";
+                    renderRecovery();
+                }
             }
             return KeyboardReturnPolicy.InsertionResult.POSSIBLY_SENT;
         }
@@ -780,8 +804,7 @@ public class RustInputMethodService extends InputMethodService {
             pendingDraftFile.finishWrite(output);
             output = null;
             PendingDictationDraft check = PendingDictationDraft.decode(pendingDraftFile.readFully());
-            boolean matches = check != null && check.state.equals(draft.state)
-                    && check.text.equals(draft.text);
+            boolean matches = draft.sameAs(check);
             if (matches) recoveryReadError = null;
             return matches;
         } catch (Throwable t) {
@@ -845,7 +868,7 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void insertPendingDraft() {
-        commitPendingDraft();
+        commitPendingDraft(true);
         updateUiState();
     }
 
@@ -856,7 +879,7 @@ public class RustInputMethodService extends InputMethodService {
                     (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
-                    "dictation", pendingDraft.text));
+                    "dictation", pendingDraft.recoveryText()));
             recoveryMessage = "Dictation copied. Discard it when safe.";
         } catch (Throwable t) {
             recoveryMessage = "Could not copy dictation";
