@@ -104,6 +104,7 @@ public class MainActivity extends AppCompatActivity {
         bindMarkerSwitch(R.id.switch_record_background, "stop_on_hide", true);
         View autoStopSlider = bindAutoStopSlider();
         bindMarkerSwitch(R.id.switch_auto_stop, "auto_stop", false, autoStopSlider);
+        bindSpeechSensitivitySlider();
 
         // Live subtitle line limit: 2 (default), 4, or 0 = unlimited.
         RadioGroup subsLinesGroup = findViewById(R.id.rg_subtitle_lines);
@@ -380,6 +381,44 @@ public class MainActivity extends AppCompatActivity {
     private void setAutoStopLabel(TextView label, float seconds) {
         label.setText(getString(R.string.setting_auto_stop_value,
                 String.format(java.util.Locale.getDefault(), "%.1f", seconds)));
+    }
+
+    private void bindSpeechSensitivitySlider() {
+        com.google.android.material.slider.Slider slider =
+                findViewById(R.id.slider_speech_threshold);
+        TextView label = findViewById(R.id.text_speech_threshold_value);
+        File file = new File(getFilesDir(), "speech_threshold_ratio");
+        float current = readSpeechSensitivity(file);
+        slider.setValue(current);
+        label.setText(getString(R.string.setting_speech_threshold_value,
+                String.format(java.util.Locale.US, "%.1f", current)));
+        slider.addOnChangeListener((s, value, fromUser) -> {
+            label.setText(getString(R.string.setting_speech_threshold_value,
+                    String.format(java.util.Locale.US, "%.1f", value)));
+            if (!fromUser) return;
+            try (java.io.FileWriter writer = new java.io.FileWriter(file)) {
+                writer.write(String.format(java.util.Locale.US, "%.1f", value));
+            } catch (IOException e) {
+                Log.e(TAG, "Failed to save speech threshold", e);
+                float effective = readSpeechSensitivity(file);
+                slider.setValue(effective);
+                label.setText(getString(R.string.setting_speech_threshold_value,
+                        String.format(java.util.Locale.US, "%.1f", effective)));
+                snackbar("Could not save speech threshold");
+            }
+        });
+    }
+
+    private float readSpeechSensitivity(File file) {
+        try (java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.FileReader(file))) {
+            return SpeechSensitivitySetting.parse(reader.readLine());
+        } catch (java.io.FileNotFoundException ignored) {
+            return SpeechSensitivitySetting.DEFAULT_RATIO;
+        } catch (IOException e) {
+            Log.w(TAG, "Could not read speech threshold", e);
+            return SpeechSensitivitySetting.DEFAULT_RATIO;
+        }
     }
 
     private void setControlEnabled(View control, boolean enabled) {

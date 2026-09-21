@@ -36,6 +36,7 @@
 //!   next one instead. See [`ShortPiece`] and [`PieceFloor`].
 
 use crate::audio::find_quietest_split;
+use crate::microphone_speech::{RoomSpeechDetector, DEFAULT_RATIO, MAX_RATIO, MIN_RATIO};
 
 pub const SAMPLE_RATE: usize = 16_000;
 
@@ -45,11 +46,6 @@ pub const SAMPLE_RATE: usize = 16_000;
 pub const DEFAULT_SPLIT_SECONDS: f32 = 3.0;
 pub const MIN_SPLIT_SECONDS: f32 = 1.5;
 pub const MAX_SPLIT_SECONDS: f32 = 8.0;
-
-/// Prevents a changing room from trapping the adaptive estimate below its
-/// current background. This floors the speech-excluding estimate; it does not
-/// replace it, so continuous speech cannot become the room by itself.
-const ALL_FRAME_FLOOR_PERCENTILE: f32 = 0.10;
 
 /// Why a piece was cut where it was. Carried on the piece so a caller, a log
 /// line or a test can tell a clean boundary from a forced one.
@@ -255,6 +251,11 @@ impl SegmenterConfig {
     /// after the selected trailing-silence duration or not at all. Invalid
     /// values use [`DEFAULT_SPLIT_SECONDS`].
     pub fn dictation_with_split_seconds(split_seconds: f32) -> Self {
+        Self::dictation_with_settings(split_seconds, DEFAULT_RATIO)
+    }
+
+    /// Dictation with independently selected pause and room-relative speech ratio.
+    pub fn dictation_with_settings(split_seconds: f32, enter_ratio: f32) -> Self {
         let split_seconds = if split_seconds.is_finite()
             && (MIN_SPLIT_SECONDS..=MAX_SPLIT_SECONDS).contains(&split_seconds)
         {
@@ -262,13 +263,19 @@ impl SegmenterConfig {
         } else {
             DEFAULT_SPLIT_SECONDS
         };
+        let enter_ratio =
+            if enter_ratio.is_finite() && (MIN_RATIO..=MAX_RATIO).contains(&enter_ratio) {
+                enter_ratio
+            } else {
+                DEFAULT_RATIO
+            };
         SegmenterConfig {
             gauge: SpeechGauge::Room {
                 frame_samples: 512, // 32 ms
                 percentile: 0.10,
                 window_samples: 5 * SAMPLE_RATE,
-                enter_ratio: 3.0,
-                leave_ratio: 2.0,
+                enter_ratio,
+                leave_ratio: (enter_ratio * 2.0 / 3.0).max(1.05),
                 silence_floor: 2.5e-4,
             },
             // Captions keep 0.4 s before a piece and 0.2 s after it. Dictation
@@ -339,20 +346,8 @@ pub struct Segmenter {
     /// A piece held back because it had too little speech, waiting at the front
     /// of the next one. See [`ShortPiece::Carry`].
     carry: Option<(Vec<f32>, u64, usize)>,
-    /// Room estimate state, for [`SpeechGauge::Room`]: samples not yet making
-    /// up a whole analysis frame, the admitted frames as `(stream position,
-    /// level)`, the level derived from them, the hysteresis state and the position
-    /// the gauge has consumed to. Per session, not per piece: the room does
-    /// not change between two sentences.
-    frame: Vec<f32>,
-    room: Vec<(u64, f32)>,
-    /// Every non-dead frame in the same time window. Its low percentile only
-    /// floors `room_level`, breaking the one-way trap when louder background
-    /// was first classified as speech and therefore excluded from `room`.
-    all_frames: Vec<(u64, f32)>,
-    room_level: Option<f32>,
-    in_speech: bool,
-    gauge_pos: u64,
+    /// One microphone classifier owns both piece boundaries and auto-stop.
+    room_detector: Option<RoomSpeechDetector>,
     /// Offset of `segment[0]` in the pushed stream.
     segment_origin: u64,
     /// Offset of `preroll[0]`, or of the next sample when `preroll` is empty.
@@ -366,6 +361,24 @@ pub struct Segmenter {
 
 impl Segmenter {
     pub fn new(cfg: SegmenterConfig) -> Self {
+        let room_detector = match cfg.gauge {
+            SpeechGauge::Room {
+                frame_samples,
+                percentile,
+                window_samples,
+                enter_ratio,
+                leave_ratio,
+                silence_floor,
+            } => Some(RoomSpeechDetector::with_policy(
+                frame_samples,
+                percentile,
+                window_samples as u64,
+                enter_ratio,
+                leave_ratio,
+                silence_floor,
+            )),
+            SpeechGauge::Absolute { .. } => None,
+        };
         Segmenter {
             cfg,
             segment: Vec::new(),
@@ -375,12 +388,7 @@ impl Segmenter {
             emitted_any: false,
             speech_samples: 0,
             carry: None,
-            frame: Vec::new(),
-            room: Vec::new(),
-            all_frames: Vec::new(),
-            room_level: None,
-            in_speech: false,
-            gauge_pos: 0,
+            room_detector,
             segment_origin: 0,
             preroll_origin: 0,
             total_pushed: 0,
@@ -397,6 +405,13 @@ impl Segmenter {
     /// Samples pushed since the last reset.
     pub fn total_pushed(&self) -> u64 {
         self.total_pushed
+    }
+
+    /// The current microphone speech decision used for the last pushed block.
+    pub fn speech_active(&self) -> bool {
+        self.room_detector
+            .as_ref()
+            .is_some_and(RoomSpeechDetector::is_speech)
     }
 
     /// Feeds one block of 16 kHz mono samples. Returns a finished piece when
@@ -533,66 +548,10 @@ impl Segmenter {
     fn is_sound(&mut self, block: &[f32]) -> bool {
         match self.cfg.gauge {
             SpeechGauge::Absolute { rms: threshold } => rms(block) >= threshold,
-            SpeechGauge::Room {
-                frame_samples,
-                percentile,
-                window_samples,
-                enter_ratio,
-                leave_ratio,
-                silence_floor,
-            } => {
-                self.frame.extend_from_slice(block);
-                while self.frame.len() >= frame_samples {
-                    let level = rms(&self.frame[..frame_samples]);
-                    self.frame.drain(..frame_samples);
-                    self.gauge_pos += frame_samples as u64;
-
-                    // With no estimate yet, nothing is speech: the first frames
-                    // of a session go into the estimate rather than into a
-                    // decision they have no basis for.
-                    if let Some(room) = self.room_level {
-                        let room = room.max(silence_floor);
-                        let ratio = if self.in_speech {
-                            leave_ratio
-                        } else {
-                            enter_ratio
-                        };
-                        self.in_speech = level > room * ratio;
-                    }
-
-                    if !self.in_speech && level >= silence_floor {
-                        self.room.push((self.gauge_pos, level));
-                    }
-                    if level >= silence_floor {
-                        self.all_frames.push((self.gauge_pos, level));
-                    }
-                    let oldest = self.gauge_pos.saturating_sub(window_samples as u64);
-                    while self.room.first().is_some_and(|&(at, _)| at < oldest) {
-                        self.room.remove(0);
-                    }
-                    while self.all_frames.first().is_some_and(|&(at, _)| at < oldest) {
-                        self.all_frames.remove(0);
-                    }
-                    if !self.room.is_empty() {
-                        let mut sorted: Vec<f32> = self.room.iter().map(|&(_, l)| l).collect();
-                        sorted
-                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        let at = ((sorted.len() - 1) as f32 * percentile).round() as usize;
-                        self.room_level = Some(sorted[at]);
-                    }
-                    if !self.all_frames.is_empty() {
-                        let mut sorted: Vec<f32> =
-                            self.all_frames.iter().map(|&(_, level)| level).collect();
-                        sorted
-                            .sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                        let at = ((sorted.len() - 1) as f32 * ALL_FRAME_FLOOR_PERCENTILE).round()
-                            as usize;
-                        let floor = sorted[at];
-                        self.room_level = Some(self.room_level.unwrap_or(floor).max(floor));
-                    }
-                }
-                self.in_speech
-            }
+            SpeechGauge::Room { .. } => self
+                .room_detector
+                .as_mut()
+                .is_some_and(|detector| detector.push(block)),
         }
     }
 
@@ -867,6 +826,48 @@ mod tests {
             return raw;
         }
         raw.iter().map(|&x| x * target_rms / have).collect()
+    }
+
+    fn bundled_bench_audio() -> Vec<f32> {
+        let bytes = include_bytes!("../app/src/main/assets/bench.wav");
+        let mut offset = 12usize;
+        while offset + 8 <= bytes.len() {
+            let size =
+                u32::from_le_bytes(bytes[offset + 4..offset + 8].try_into().unwrap()) as usize;
+            if &bytes[offset..offset + 4] == b"data" {
+                return bytes[offset + 8..offset + 8 + size]
+                    .chunks_exact(2)
+                    .map(|sample| i16::from_le_bytes([sample[0], sample[1]]) as f32 / 32768.0)
+                    .collect();
+            }
+            offset += 8 + size + (size & 1);
+        }
+        panic!("bundled benchmark has no PCM data chunk");
+    }
+
+    #[test]
+    fn bundled_recording_push_replay_preserves_audio_and_detects_speech() {
+        let audio = bundled_bench_audio();
+        let mut seg = dictation();
+        let mut pieces = Vec::new();
+        let mut saw_speech = false;
+        for block in audio.chunks(997) {
+            if let Some(piece) = seg.push(block) {
+                pieces.push(piece);
+            }
+            saw_speech |= seg.speech_active();
+        }
+        pieces.extend(seg.flush());
+
+        let replay: Vec<f32> = pieces
+            .iter()
+            .flat_map(|piece| piece.samples.iter().copied())
+            .collect();
+        assert!(
+            saw_speech,
+            "the bundled microphone recording must enter speech"
+        );
+        assert_eq!(replay, audio, "dictation push/replay must remain lossless");
     }
 
     /// The level above which the test audio counts as speech, used by the
@@ -1323,8 +1324,10 @@ mod tests {
 
         let check = |cfg: SegmenterConfig| {
             let mut seg = Segmenter::new(cfg);
-            seg.room_level = Some(0.01);
-            seg.in_speech = true;
+            seg.room_detector
+                .as_mut()
+                .unwrap()
+                .seed_for_test(0.01, true);
             seg.is_sound(&tone(512.0 / SAMPLE_RATE as f32, 0.035))
         };
         assert!(check(SegmenterConfig::dictation()));
@@ -1426,11 +1429,12 @@ mod tests {
             } => window_samples / frame_samples,
             _ => unreachable!(),
         };
+        let retained = seg.room_detector.as_ref().unwrap().retained_room_frames();
         assert!(
-            seg.room.len() <= window + 1,
+            retained <= window + 1,
             "after {} s the window holds {} frames; it should hold at most {}",
             dry.len() / SAMPLE_RATE,
-            seg.room.len(),
+            retained,
             window + 1
         );
     }

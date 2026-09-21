@@ -756,17 +756,17 @@ public class RustInputMethodService extends InputMethodService {
         try {
             PendingDictationDraft restored = PendingDictationDraft.decode(pendingDraftFile.readFully());
             if (restored == null) {
-                recoveryReadError = "Saved dictation is damaged. Discard it to continue.";
+                recoveryReadError = "Saved dictation is damaged. Discard it to remove it.";
                 Log.e(TAG, "pending dictation record is malformed");
             }
             return restored;
         } catch (FileNotFoundException e) {
             if (!pendingDraftArtifactsExist()) return null;
-            recoveryReadError = "Saved dictation could not be read. Discard it to continue.";
+            recoveryReadError = "Saved dictation could not be read. Discard it to remove it.";
             Log.e(TAG, "pending dictation artifacts cannot be opened", e);
             return null;
         } catch (Throwable t) {
-            recoveryReadError = "Saved dictation could not be read. Discard it to continue.";
+            recoveryReadError = "Saved dictation could not be read. Discard it to remove it.";
             Log.e(TAG, "could not read pending dictation", t);
             return null;
         }

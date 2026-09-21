@@ -12,14 +12,12 @@ use jni::objects::{GlobalRef, JObject, JValue};
 use jni::JNIEnv;
 
 use crate::audio::compact_for_inference;
-use crate::engine;
 use crate::streaming::{
     CutCause, Segmenter, SegmenterConfig, DEFAULT_SPLIT_SECONDS, MAX_SPLIT_SECONDS,
     MIN_SPLIT_SECONDS,
 };
+use crate::{engine, microphone_speech};
 
-const MIN_SPEECH_LEVEL: f32 = 0.12;
-const SPEECH_MARGIN: f32 = 0.08;
 const AUTO_STOP_SECONDS_FILE: &str = "auto_stop_seconds";
 const MIN_AUTO_STOP_SECONDS: f32 = 1.5;
 const MAX_AUTO_STOP_SECONDS: f32 = 8.0;
@@ -59,7 +57,6 @@ enum Job {
 
 struct Endpointing {
     last_voice: Mutex<Instant>,
-    noise_floor: Mutex<f32>,
     speech_started: AtomicBool,
 }
 
@@ -484,7 +481,7 @@ fn queue_audio(
     tx: &Sender<Job>,
     next_sequence: &Arc<AtomicU64>,
     attempt: &Arc<Attempt>,
-) {
+) -> bool {
     if let Ok(mut segmenter) = segmenter.lock() {
         if let Some(piece) = segmenter.push(data) {
             let sequence = next_sequence.fetch_add(1, Ordering::SeqCst);
@@ -500,7 +497,9 @@ fn queue_audio(
                 },
             );
         }
+        return segmenter.speech_active();
     }
+    false
 }
 
 fn finish_worker(env: &mut JNIEnv, state: &mut VoiceSessionState, attempt: &Arc<Attempt>) {
@@ -558,8 +557,11 @@ pub fn start_recording(
     let attempt = Arc::new(Attempt::new(session_id));
     state.current = Some(attempt.clone());
     let split_seconds = split_seconds(state.files_dir.as_deref());
-    *state.segmenter.lock().unwrap() =
-        Segmenter::new(SegmenterConfig::dictation_with_split_seconds(split_seconds));
+    let speech_ratio = microphone_speech::read_ratio(state.files_dir.as_deref());
+    *state.segmenter.lock().unwrap() = Segmenter::new(SegmenterConfig::dictation_with_settings(
+        split_seconds,
+        speech_ratio,
+    ));
     state.next_sequence.store(0, Ordering::SeqCst);
     let (tx, rx) = crossbeam_channel::unbounded::<Job>();
     if !spawn_worker(
@@ -596,7 +598,6 @@ pub fn start_recording(
     let endpoint = auto_stop.then(|| {
         Arc::new(Endpointing {
             last_voice: Mutex::new(Instant::now()),
-            noise_floor: Mutex::new(0.0),
             speech_started: AtomicBool::new(false),
         })
     });
@@ -614,17 +615,14 @@ pub fn start_recording(
     let stream = device.build_input_stream(
         &config,
         move |data: &[f32], _: &_| {
-            queue_audio(data, &segmenter, &tx, &next_sequence, &capture_attempt);
+            let speech_active =
+                queue_audio(data, &segmenter, &tx, &next_sequence, &capture_attempt);
             let rms = (data.iter().map(|x| x * x).sum::<f32>() / data.len().max(1) as f32).sqrt();
             let level = (rms * 6.0).clamp(0.0, 1.0);
             if let Some(ep) = &endpoint_cb {
-                let floor = *ep.noise_floor.lock().unwrap();
-                if level > MIN_SPEECH_LEVEL && level > floor + SPEECH_MARGIN {
+                if speech_active {
                     *ep.last_voice.lock().unwrap() = Instant::now();
                     ep.speech_started.store(true, Ordering::SeqCst);
-                } else {
-                    let mut floor = ep.noise_floor.lock().unwrap();
-                    *floor = *floor * 0.95 + level * 0.05;
                 }
             }
             let mut last = last_sent.lock().unwrap();
