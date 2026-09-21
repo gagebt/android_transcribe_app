@@ -485,14 +485,16 @@ public class RustInputMethodService extends InputMethodService {
                 return;
             }
             String committed = text + " ";
-            PendingDictationDraft previous = pendingDraft;
-            pendingDraft = new PendingDictationDraft(PendingDictationDraft.PENDING, committed);
+            pendingDraft = pendingDraft == null
+                    ? new PendingDictationDraft(PendingDictationDraft.PENDING, committed)
+                    : pendingDraft.stageCurrent(committed);
             boolean staged = writePendingDraft(pendingDraft);
             if (!staged) {
                 recoveryMessage = "Could not save the latest dictation";
             } else if (inputActive && getCurrentInputConnection() != null) {
-                recoveryMessage = previous == null ? null : "Latest dictation replaced the saved copy";
-                commitPendingDraft();
+                recoveryMessage = pendingDraft.savedText.isEmpty()
+                        ? null : "Older dictation stays saved";
+                commitPendingDraft(false);
             }
             if (pauseAudioActive) {
                 audioPauser.abandon(this);
@@ -508,8 +510,11 @@ public class RustInputMethodService extends InputMethodService {
         });
     }
 
-    private void commitPendingDraft() {
-        if (pendingDraft == null || pendingDraft.text.isEmpty()) return;
+    private void commitPendingDraft(boolean includeSaved) {
+        if (pendingDraft == null) return;
+        if (!includeSaved && (!pendingDraft.hasCurrent() || pendingDraft.text.isEmpty())) return;
+        String textToCommit = includeSaved ? pendingDraft.recoveryText() : pendingDraft.text;
+        if (textToCommit.isEmpty()) return;
         InputConnection ic = getCurrentInputConnection();
         if (!inputActive || ic == null) {
             recoveryMessage = "No text field is available";
@@ -518,7 +523,9 @@ public class RustInputMethodService extends InputMethodService {
         }
 
         PendingDictationDraft original = pendingDraft;
-        PendingDictationDraft attempted = original.withState(PendingDictationDraft.ATTEMPTED);
+        PendingDictationDraft attempted = includeSaved
+                ? original.asSingleAttempt()
+                : original.withState(PendingDictationDraft.ATTEMPTED);
         pendingDraft = attempted;
         if (!writePendingDraft(attempted)) {
             pendingDraft = original;
@@ -553,7 +560,25 @@ public class RustInputMethodService extends InputMethodService {
         }
 
         selectTranscriptionIfEnabled(ic, attempted.text, after);
-        if (clearPendingDraft()) recoveryMessage = null;
+        if (includeSaved) {
+            if (clearPendingDraft()) recoveryMessage = null;
+            return;
+        }
+
+        PendingDictationDraft remaining = attempted.withoutCurrent();
+        if (remaining.isEmpty()) {
+            if (clearPendingDraft()) recoveryMessage = null;
+        } else {
+            pendingDraft = remaining;
+            if (writePendingDraft(remaining)) {
+                recoveryMessage = "Older dictation stays saved";
+                renderRecovery();
+            } else {
+                pendingDraft = attempted;
+                recoveryMessage = "Could not clear the delivered copy; it may be shown again";
+                renderRecovery();
+            }
+        }
     }
 
     private void selectTranscriptionIfEnabled(
@@ -655,8 +680,7 @@ public class RustInputMethodService extends InputMethodService {
             pendingDraftFile.finishWrite(output);
             output = null;
             PendingDictationDraft check = PendingDictationDraft.decode(pendingDraftFile.readFully());
-            boolean matches = check != null && check.state.equals(draft.state)
-                    && check.text.equals(draft.text);
+            boolean matches = draft.sameAs(check);
             if (matches) recoveryReadError = null;
             return matches;
         } catch (Throwable t) {
@@ -720,7 +744,7 @@ public class RustInputMethodService extends InputMethodService {
     }
 
     private void insertPendingDraft() {
-        commitPendingDraft();
+        commitPendingDraft(true);
         updateUiState();
     }
 
@@ -731,7 +755,7 @@ public class RustInputMethodService extends InputMethodService {
                     (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
             if (clipboard == null) throw new IllegalStateException("clipboard unavailable");
             clipboard.setPrimaryClip(android.content.ClipData.newPlainText(
-                    "dictation", pendingDraft.text));
+                    "dictation", pendingDraft.recoveryText()));
             recoveryMessage = "Dictation copied. Discard it when safe.";
         } catch (Throwable t) {
             recoveryMessage = "Could not copy dictation";
