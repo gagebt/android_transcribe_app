@@ -74,4 +74,22 @@ public class PendingDictationDraftTest {
         assertFalse(shifted.isComparableTo(before));
         assertFalse(shifted.isKnownMismatchFrom(before, "there "));
     }
+
+    @Test public void onlyExactReadableCommitClearsTheSavedCopy() {
+        RustInputMethodService.EditorSnapshot before =
+                new RustInputMethodService.EditorSnapshot("hello", 0, 5, 5);
+        RustInputMethodService.EditorSnapshot exact =
+                new RustInputMethodService.EditorSnapshot("hello world", 0, 11, 11);
+        RustInputMethodService.EditorSnapshot changed =
+                new RustInputMethodService.EditorSnapshot("hello WORLD", 0, 11, 11);
+
+        assertTrue(RustInputMethodService.EditorSnapshot.isConfirmedCommit(
+                before, exact, " world"));
+        assertFalse(RustInputMethodService.EditorSnapshot.isConfirmedCommit(
+                before, changed, " world"));
+        assertFalse(RustInputMethodService.EditorSnapshot.isConfirmedCommit(
+                before, null, " world"));
+        assertFalse(RustInputMethodService.EditorSnapshot.isConfirmedCommit(
+                null, exact, " world"));
+    }
 }

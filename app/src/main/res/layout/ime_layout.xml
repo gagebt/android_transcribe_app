@@ -23,6 +23,8 @@
             android:text="Tap to speak"
             android:textColor="?attr/colorOnSurfaceVariant"
             android:textAppearance="?attr/textAppearanceBodyMedium"
+            android:maxLines="1"
+            android:ellipsize="end"
             android:paddingStart="4dp"/>
 
         <ProgressBar
@@ -33,7 +35,7 @@
             android:visibility="gone"/>
     </LinearLayout>
 
-    <!-- Recovery replaces the record area without changing keyboard dimensions. -->
+    <!-- Recovery actions share the fixed record area without covering the microphone. -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="200dp">
@@ -81,32 +83,22 @@
         <LinearLayout
             android:id="@+id/ime_recovery_panel"
             android:layout_width="match_parent"
-            android:layout_height="match_parent"
-            android:orientation="vertical"
+            android:layout_height="48dp"
+            android:layout_gravity="top"
+            android:orientation="horizontal"
             android:visibility="gone"
-            android:padding="8dp"
-            android:background="?attr/colorSurface"
+            android:gravity="end"
             android:clickable="true">
 
-            <TextView
-                android:id="@+id/ime_recovery_text"
-                android:layout_width="match_parent"
-                android:layout_height="0dp"
-                android:layout_weight="1"
-                android:maxLines="4"
-                android:ellipsize="end"
-                android:textIsSelectable="true" />
-
             <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
+                android:layout_width="wrap_content"
+                android:layout_height="48dp"
                 android:orientation="horizontal">
 
                 <Button
                     android:id="@+id/ime_recovery_insert"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
                     android:minWidth="0dp"
                     android:paddingStart="4dp"
                     android:paddingEnd="4dp"
@@ -114,9 +106,8 @@
 
                 <Button
                     android:id="@+id/ime_recovery_copy"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
                     android:minWidth="0dp"
                     android:paddingStart="4dp"
                     android:paddingEnd="4dp"
@@ -124,9 +115,8 @@
 
                 <Button
                     android:id="@+id/ime_recovery_discard"
-                    android:layout_width="0dp"
-                    android:layout_height="wrap_content"
-                    android:layout_weight="1"
+                    android:layout_width="wrap_content"
+                    android:layout_height="48dp"
                     android:minWidth="0dp"
                     android:paddingStart="4dp"
                     android:paddingEnd="4dp"

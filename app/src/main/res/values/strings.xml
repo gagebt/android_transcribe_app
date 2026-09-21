@@ -29,6 +29,7 @@
     <string name="setting_insert_button">Show Insert recovery action</string>
     <string name="setting_insert_button_desc">Allow saved dictation to be inserted at the current cursor</string>
     <string name="dictation_insert">Insert</string>
+    <string name="dictation_insert_again">Insert again</string>
     <string name="dictation_copy">Copy</string>
     <string name="dictation_discard">Discard</string>
 
