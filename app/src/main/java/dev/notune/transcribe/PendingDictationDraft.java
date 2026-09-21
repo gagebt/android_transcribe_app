@@ -32,7 +32,7 @@ final class PendingDictationDraft {
         String older = savedText;
         boolean olderMayBeDelivered = savedMayAlreadyBeDelivered;
         if (hasCurrent()) {
-            older += text;
+            older = joinResults(older, text);
             olderMayBeDelivered |= currentMayAlreadyBeDelivered();
         }
         return new PendingDictationDraft(older, olderMayBeDelivered, PENDING, newText);
@@ -66,7 +66,7 @@ final class PendingDictationDraft {
     }
 
     String recoveryText() {
-        return savedText + (hasCurrent() ? text : "");
+        return hasCurrent() ? joinResults(savedText, text) : savedText;
     }
 
     boolean currentMayAlreadyBeDelivered() {
@@ -124,6 +124,15 @@ final class PendingDictationDraft {
 
     private static String decodeText(String value) {
         return new String(Base64.getDecoder().decode(value), StandardCharsets.UTF_8);
+    }
+
+    private static String joinResults(String older, String newer) {
+        if (older.isEmpty() || newer.isEmpty()
+                || Character.isWhitespace(older.charAt(older.length() - 1))
+                || Character.isWhitespace(newer.charAt(0))) {
+            return older + newer;
+        }
+        return older + " " + newer;
     }
 
     private static boolean validActiveState(String value) {
