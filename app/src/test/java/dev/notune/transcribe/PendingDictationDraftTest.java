@@ -96,6 +96,13 @@ public class PendingDictationDraftTest {
         assertEquals("Rejected B. ", rejectedAAndB.currentText);
     }
 
+    @Test public void recoverySeparatesTrimmedResultsWithoutChangingSingleResultBytes() {
+        PendingDictationDraft attemptedA =
+                new PendingDictationDraft(PendingDictationDraft.ATTEMPTED, "alpha");
+        assertEquals("alpha", attemptedA.recoveryText());
+        assertEquals("alpha beta", attemptedA.stageCurrent("beta").recoveryText());
+    }
+
     @Test public void normalConfirmedResultClearsItsTemporaryState() {
         PendingDictationDraft normal =
                 new PendingDictationDraft(PendingDictationDraft.PENDING, "Normal. ");
